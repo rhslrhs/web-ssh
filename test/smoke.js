@@ -329,6 +329,77 @@ async function testReview2() {
   await stopWeb(web);
 }
 
+async function testSessionAndPush() {
+  console.log('[로그인 유지 / 푸시]');
+  // 유휴 3초, 최대 6초
+  let web = await startWeb({ SESSION_IDLE_MIN: '0.05', SESSION_MAX_HOURS: String(6 / 3600) });
+  const first = await login({ password: 'testpassword' });
+  const cookieOf = (r) => (r.headers.get('set-cookie') || '').split(';')[0];
+  await new Promise((r) => setTimeout(r, 1500));
+  let r = await fetch(base + '/api/hosts', { headers: { Cookie: first.cookie } });
+  const renewed = cookieOf(r);
+  assert(r.status === 200 && renewed.startsWith('wssh=') && renewed !== first.cookie); ok('활동하면 새 만료 시각으로 쿠키 갱신');
+  await new Promise((r) => setTimeout(r, 2000)); // 최초 로그인 3.5초 후
+  assert.strictEqual((await fetch(base + '/api/hosts', { headers: { Cookie: first.cookie } })).status, 401); ok('갱신 안 된 쿠키는 유휴 시간 후 만료');
+  r = await fetch(base + '/api/hosts', { headers: { Cookie: renewed } });
+  assert.strictEqual(r.status, 200); ok('갱신된 쿠키는 유효 (쓰는 동안 연장)');
+  let c = cookieOf(r) || renewed;
+  for (let i = 0; i < 3; i++) { await new Promise((res) => setTimeout(res, 1200)); r = await fetch(base + '/api/hosts', { headers: { Cookie: c } }); c = cookieOf(r) || c; }
+  assert.strictEqual(r.status, 401, '최대 기간 초과'); ok('계속 써도 최대 기간이 지나면 만료');
+  const me = await (await fetch(base + '/api/me', { headers: { Cookie: c } })).json();
+  assert.strictEqual(me.authed, false);
+  await stopWeb(web);
+
+  // 푸시
+  web = await startWeb({});
+  const { cookie } = await login({ password: 'testpassword' });
+  const A = { Cookie: cookie };
+  const info = await (await fetch(base + '/api/push', { headers: A })).json();
+  assert(info.publicKey && info.publicKey.length > 60 && Array.isArray(info.subs) && info.token.exists === false); ok('VAPID 공개키 생성');
+  const fakeKeys = { p256dh: 'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM', auth: 'tBHItJI5svbpez7KI4CCXg' };
+  r = await post('/api/push/subscribe', { subscription: { endpoint: 'https://evil.example/push', keys: fakeKeys } }, A);
+  assert.strictEqual(r.status, 400); ok('알 수 없는 푸시 서버 주소 거부 (SSRF 방지)');
+  r = await post('/api/push/subscribe', { subscription: { endpoint: 'https://fcm.googleapis.com/fcm/send/abc123', keys: fakeKeys }, label: 'Android · Chrome' }, A);
+  const sub = await r.json();
+  assert(r.status === 200 && sub.id && sub.service === 'fcm.googleapis.com'); ok('FCM 구독 등록');
+  r = await fetch(base + '/api/push/subs/' + sub.id, { method: 'DELETE', headers: { ...H, ...A } });
+  assert((await r.json()).ok); ok('구독 삭제');
+
+  r = await post('/api/notify', { hook_event_name: 'Stop' });
+  assert.strictEqual(r.status, 401); ok('토큰 없는 알림 요청 거부');
+  r = await post('/api/push/token', {}, { ...A, 'X-Real-IP': '203.0.113.7' });
+  assert(r.status === 200 || r.status === 403); // TRUST_PROXY 꺼짐 → 헤더 무시, 루프백이라 허용
+  const { token } = await (await post('/api/push/token', {}, A)).json();
+  assert(/^wsn_/.test(token));
+  r = await post('/api/notify', { hook_event_name: 'Stop', cwd: '/home/u/proj' }, { Authorization: 'Bearer ' + token });
+  assert.deepStrictEqual(await r.json(), { sent: 0, removed: 0, failed: 0 }); ok('토큰으로 알림 요청 (구독 0대)');
+  r = await post('/api/notify', {}, { Authorization: 'Bearer ' + token, Cookie: '' });
+  assert.strictEqual(r.status, 200);
+  r = await post('/api/notify', {}, { Authorization: 'Bearer wsn_wrong' });
+  assert.strictEqual(r.status, 401); ok('틀린 토큰 거부');
+  assert.strictEqual((await fetch(base + '/api/hosts', { headers: { Authorization: 'Bearer ' + token } })).status, 401); ok('알림 토큰으로는 다른 API 사용 불가');
+
+  // CLI 재발급 → 실행 중 서버에 바로 반영, 이전 토큰 무효
+  const out = require('child_process').execFileSync(process.execPath, [path.join(APP, 'bin/notify-token.js')], {
+    env: { ...process.env, APP_PASSWORD: 'testpassword', DATA_DIR: web.dataDir, SECRET_KEY: '' },
+  }).toString().trim();
+  assert(/^wsn_/.test(out) && out !== token);
+  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + token })).status, 401);
+  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + out })).status, 200); ok('CLI 토큰 재발급 즉시 반영, 이전 토큰 무효');
+  assert.strictEqual((await fetch(base + '/sw.js')).status, 200);
+  assert.strictEqual((await fetch(base + '/icon-192.png')).status, 200); ok('서비스 워커 / 아이콘 제공');
+  await stopWeb(web);
+
+  // 훅 JSON → 알림 내용 (대화 내용 미포함)
+  process.env.APP_PASSWORD = 'testpassword';
+  process.env.DATA_DIR = newDataDir();
+  const push = require('../lib/push');
+  let p = push.fromHook({ hook_event_name: 'Stop', cwd: '/mnt/c/dev/git/web-ssh/', session_id: 's1', transcript_path: '/secret/t.jsonl' }, { id: 'h1', name: 'PC-WSL' });
+  assert.deepStrictEqual(p, { title: 'PC-WSL · web-ssh', body: '✅ 작업을 마쳤습니다', url: './#/term/h1', tag: 'claude-h1-s1' });
+  p = push.fromHook({ hook_event_name: 'Notification', message: 'Claude needs your permission to use Bash', cwd: 'C:\\dev\\app' }, null);
+  assert(p.title === 'Claude · app' && p.body.includes('permission') && !JSON.stringify(p).includes('secret')); ok('훅 → 알림 내용 변환 (대화 내용 제외)');
+}
+
 function testTotpUnit() {
   console.log('[TOTP]');
   // RFC 6238 테스트 벡터 (SHA1, 비밀키 "12345678901234567890")
@@ -347,6 +418,7 @@ function testTotpUnit() {
     await testExternal();
     await testHardening();
     await testReview2();
+    await testSessionAndPush();
     console.log('ALL PASSED');
     process.exitCode = 0;
   } catch (e) {

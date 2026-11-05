@@ -199,6 +199,16 @@ h4 { margin: 0 0 8px; font-size: 15px; display: flex; align-items: center; gap: 
 .row.tight { margin-top: 8px; }
 .row.tight input { max-width: 160px; letter-spacing: .2em; }
 
+.row.wrap { flex-wrap: wrap; }
+.dev-list { list-style: none; padding: 0; margin: 10px 0 0; font-size: 13.5px; }
+.dev-list li { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); }
+.dev-list li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dev-list li small { color: var(--muted); }
+.hook { margin-top: 12px; font-size: 14px; }
+.hook summary { cursor: pointer; color: var(--accent); }
+.hook pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 11.5px; overflow-x: auto; white-space: pre; max-height: 260px; }
+#push-host { max-width: 220px; }
+
 /* 좁은 화면: 상단바 버튼 압축 */
 @media (max-width: 480px) {
   .topbar { padding-left: 12px; padding-right: 12px; gap: 6px; }

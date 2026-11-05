@@ -8,6 +8,8 @@ const auth = require('./lib/auth');
 const store = require('./lib/store');
 const { connectChain, tcpCheck } = require('./lib/ssh');
 const wol = require('./lib/wol');
+const push = require('./lib/push');
+const notifyToken = require('./lib/notifytoken');
 
 const app = express();
 app.disable('x-powered-by');
@@ -39,6 +41,19 @@ app.post('/api/login', auth.login);
 app.post('/api/logout', auth.logout);
 app.get('/api/me', auth.me);
 
+// ── 외부 스크립트(Claude Code 훅 등) → 푸시. 로그인 쿠키가 아닌 알림 전용 토큰으로 인증 ──
+let notifyHits = [];
+app.post('/api/notify', async (req, res) => {
+  const h = String(req.headers.authorization || '');
+  if (!notifyToken.check(h.startsWith('Bearer ') ? h.slice(7).trim() : '')) return res.status(401).json({ error: '알림 토큰이 올바르지 않습니다' });
+  const now = Date.now();
+  notifyHits = notifyHits.filter((t) => now - t < 60e3);
+  if (notifyHits.length >= 30) return res.status(429).json({ error: '알림이 너무 많습니다 (분당 30회)' });
+  notifyHits.push(now);
+  const host = req.query.host ? store.get(String(req.query.host)) : null;
+  try { res.json(await push.send(push.fromHook(req.body, host))); } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 const api = express.Router();
 api.use(auth.requireAuth);
 const wrap = (fn) => (req, res) => {
@@ -53,6 +68,17 @@ api.post('/security/totp/start', auth.requirePrivate, (req, res) =>
 api.post('/security/totp/enable', auth.requirePrivate, auth.totpEnable);
 api.post('/security/totp/disable', auth.requirePrivate, auth.totpDisable);
 api.post('/security/logout-all', auth.logoutAll);
+
+// ── 푸시 구독 관리 ──
+const pushWrap = (fn) => async (req, res) => {
+  try { res.json(await fn(req, res)); } catch (e) { res.status(e instanceof push.PushError ? 400 : 500).json({ error: e.message }); }
+};
+api.get('/push', pushWrap(() => ({ publicKey: push.publicKey(), subs: push.list(), token: notifyToken.info() })));
+api.post('/push/subscribe', pushWrap((req) => push.subscribe((req.body || {}).subscription, (req.body || {}).label)));
+api.delete('/push/subs/:id', pushWrap((req) => ({ ok: push.remove(req.params.id) })));
+api.post('/push/test', pushWrap(() => push.send({ title: 'Web SSH', body: '테스트 알림입니다 🔔', url: './', tag: 'test' })));
+// 토큰 발급은 내부망/VPN 에서만 (기존 토큰은 무효)
+api.post('/push/token', auth.requirePrivate, pushWrap(() => ({ token: notifyToken.issue() })));
 
 api.get('/hosts', (req, res) => res.json(store.list()));
 api.post('/hosts', wrap((req, res) => res.json(store.create(req.body || {}))));

@@ -247,6 +247,129 @@ $('#btn-reset-hk').addEventListener('click', async () => {
 // ── 보안 설정 ──
 const dlgSec = $('#dlg-sec');
 
+// ── 푸시 알림 ──
+const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && window.isSecureContext;
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent);
+const isStandalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+let swReg = null;
+if (pushSupported) {
+  navigator.serviceWorker.register('sw.js').then((r) => { swReg = r; }, (e) => console.warn('SW 등록 실패', e));
+}
+if ('serviceWorker' in navigator) {
+  // 알림 클릭 → 이미 열린 창에서 해당 터미널로 이동
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    if (e.data && e.data.type === 'navigate' && typeof e.data.url === 'string' && e.data.url.startsWith(location.origin)) location.href = e.data.url;
+  });
+}
+const b64ToBytes = (b64) => {
+  const s = atob((b64 + '='.repeat((4 - (b64.length % 4)) % 4)).replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(s, (ch) => ch.charCodeAt(0));
+};
+function deviceLabel() {
+  const ua = navigator.userAgent;
+  const os = /Android/.test(ua) ? 'Android' : isIOS ? 'iOS' : /Windows/.test(ua) ? 'Windows' : /Mac/.test(ua) ? 'macOS' : 'Linux';
+  const br = /SamsungBrowser/.test(ua) ? '삼성 인터넷' : /Edg\//.test(ua) ? 'Edge' : /Firefox/.test(ua) ? 'Firefox' : /Chrome/.test(ua) ? 'Chrome' : 'Safari';
+  return `${os} · ${br}${isStandalone ? ' (앱)' : ''}`;
+}
+const myPushId = () => { try { return localStorage.getItem('pushSubId'); } catch { return null; } };
+const setMyPushId = (id) => { try { if (id) localStorage.setItem('pushSubId', id); else localStorage.removeItem('pushSubId'); } catch { /* ignore */ } };
+async function currentSub() {
+  if (!pushSupported) return null;
+  const reg = swReg || await navigator.serviceWorker.ready;
+  return reg.pushManager.getSubscription();
+}
+
+async function renderPush() {
+  const help = $('#push-help');
+  const state = $('#push-state');
+  const on = $('#btn-push-on'), off = $('#btn-push-off');
+  let info;
+  try { info = await api('GET', 'api/push'); } catch (e) { help.textContent = e.message; return; }
+  const mine = await currentSub().catch(() => null);
+  const mineOnServer = !!mine && info.subs.some((s) => s.id === myPushId());
+  if (!window.isSecureContext) help.textContent = '알림은 HTTPS 주소(https://…)로 접속해야 켤 수 있습니다. 지금은 http 접속입니다.';
+  else if (isIOS && !isStandalone) help.textContent = 'iPhone/iPad 는 Safari 공유 → "홈 화면에 추가" 후, 그 앱에서 켜야 합니다.';
+  else if (!pushSupported) help.textContent = '이 브라우저는 푸시 알림을 지원하지 않습니다.';
+  else if (Notification.permission === 'denied') help.textContent = '알림 권한이 차단되어 있습니다. 브라우저 사이트 설정에서 알림을 허용하세요.';
+  else help.textContent = 'Claude 작업 완료·입력 대기 등을 이 기기로 알려줍니다.';
+  const canOn = pushSupported && Notification.permission !== 'denied' && !(isIOS && !isStandalone);
+  state.textContent = mineOnServer ? '이 기기 켜짐' : `${info.subs.length}대 등록`;
+  state.classList.toggle('on', !!mineOnServer);
+  on.hidden = !canOn || !!mineOnServer;
+  off.hidden = !mineOnServer;
+  $('#btn-push-test').hidden = !info.subs.length;
+
+  const ul = $('#push-subs');
+  ul.textContent = '';
+  for (const s of info.subs) {
+    ul.append(h('li', {},
+      h('span', {}, s.label, ' ', h('small', {}, `· ${new Date(s.created).toLocaleDateString()}`), s.id === myPushId() ? h('small', {}, ' (이 기기)') : null),
+      h('button', { type: 'button', class: 'ghost small danger', onclick: async () => {
+        await secCall(`api/push/subs/${s.id}`, undefined, 'DELETE');
+        if (s.id === myPushId()) { const m = await currentSub().catch(() => null); if (m) await m.unsubscribe(); setMyPushId(null); }
+        renderPush();
+      } }, '삭제')));
+  }
+
+  const sel = $('#push-host');
+  const prev = sel.value;
+  sel.replaceChildren(h('option', { value: '' }, '알림 클릭 시 열 호스트 (선택)'), ...hosts.map((x) => h('option', { value: x.id }, x.name)));
+  sel.value = prev || (hosts.find((x) => /wsl|claude/i.test(x.command || '')) || {}).id || '';
+  $('#btn-push-token').textContent = info.token.exists ? '토큰 재발급' : '토큰 발급';
+}
+
+$('#btn-push-on').addEventListener('click', async () => {
+  $('#sec-err').textContent = '';
+  try {
+    if ((await Notification.requestPermission()) !== 'granted') throw new Error('알림 권한이 허용되지 않았습니다.');
+    const { publicKey } = await api('GET', 'api/push');
+    const reg = swReg || await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+    const r = await api('POST', 'api/push/subscribe', { subscription: sub.toJSON(), label: deviceLabel() });
+    setMyPushId(r.id);
+    toast('이 기기에서 알림을 받습니다.');
+  } catch (e) { $('#sec-err').textContent = e.message; }
+  renderPush();
+});
+$('#btn-push-off').addEventListener('click', async () => {
+  const id = myPushId();
+  if (id) await secCall(`api/push/subs/${id}`, undefined, 'DELETE');
+  const m = await currentSub().catch(() => null);
+  if (m) await m.unsubscribe();
+  setMyPushId(null);
+  renderPush();
+});
+$('#btn-push-test').addEventListener('click', async () => {
+  const r = await secCall('api/push/test');
+  if (r) toast(`테스트 알림 전송: ${r.sent}대 성공${r.failed ? `, ${r.failed}대 실패` : ''}${r.removed ? `, 만료 ${r.removed}대 정리` : ''}`, 4000);
+});
+$('#btn-push-token').addEventListener('click', async () => {
+  if (!confirm('알림 토큰을 새로 발급할까요? 이전 토큰은 더 이상 동작하지 않습니다.')) return;
+  const r = await secCall('api/push/token');
+  if (!r) return;
+  const hostQ = $('#push-host').value ? `?host=${encodeURIComponent($('#push-host').value)}` : '';
+  const url = new URL('api/notify', location.href).href + hostQ;
+  const cfg = `# 1) 알림 스크립트 (Claude 가 실행되는 곳, 예: WSL)
+mkdir -p ~/.claude && cat > ~/.claude/web-ssh-notify.sh <<'EOF'
+#!/bin/sh
+# Claude Code 훅 → web-ssh 푸시 (stdin 의 훅 JSON 을 그대로 전달)
+curl -fsS -m 5 -X POST '${url}' \\
+  -H 'Authorization: Bearer ${r.token}' \\
+  -H 'Content-Type: application/json' --data-binary @- >/dev/null 2>&1 || true
+EOF
+chmod 700 ~/.claude/web-ssh-notify.sh
+
+# 2) ~/.claude/settings.json 의 "hooks" 에 추가
+"Stop":         [{ "hooks": [{ "type": "command", "command": "sh ~/.claude/web-ssh-notify.sh" }] }],
+"Notification": [{ "hooks": [{ "type": "command", "command": "sh ~/.claude/web-ssh-notify.sh" }] }]`;
+  $('#push-hook-cfg').textContent = cfg;
+  $('#push-hook-cfg').hidden = false;
+  $('#btn-push-copy').hidden = false;
+  renderPush();
+});
+$('#btn-push-copy').addEventListener('click', () => copyText($('#push-hook-cfg').textContent));
+
 async function openSecurity() {
   $('#sec-err').textContent = '';
   $('#sec-totp-setup').hidden = true;
@@ -259,12 +382,13 @@ async function openSecurity() {
   $('#sec-totp-on').hidden = !s.totp || !s.privateNet;
   $('#sec-totp-off').hidden = s.totp || !s.privateNet;
   $('#sec-private-only').hidden = s.privateNet;
+  renderPush();
   if (!dlgSec.open) dlgSec.showModal();
 }
 
-const secCall = async (url, body) => {
+const secCall = async (url, body, method = 'POST') => {
   $('#sec-err').textContent = '';
-  try { return await api('POST', url, body); } catch (e) { $('#sec-err').textContent = e.message; return null; }
+  try { return await api(method, url, body); } catch (e) { $('#sec-err').textContent = e.message; return null; }
 };
 
 $('#sec-form').addEventListener('submit', (e) => e.preventDefault());
@@ -369,7 +493,7 @@ function ensureTerm() {
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open($('#term'));
-  term.onData((d) => sendInput(applyMods(d)));
+  term.onData((d) => { markActive(); sendInput(applyMods(d)); });
   term.onResize(({ cols, rows }) => wsSend({ t: 'resize', cols, rows }));
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown' || !ev.ctrlKey || !ev.shiftKey) return true;
@@ -408,7 +532,7 @@ function copyText(text) {
   ta.select();
   try { document.execCommand('copy'); done(); } catch { /* ignore */ }
   ta.remove();
-  term.focus();
+  if (term && !$('#view-term').hidden) term.focus();
 }
 
 function wsSend(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
@@ -605,6 +729,24 @@ function route() {
   clearInterval(statusTimer);
   statusTimer = setInterval(() => { if (!$('#view-list').hidden) refreshStatus(); }, 15000);
 }
+// ── 활동 중이면 로그인 연장 ──
+// 서버는 API 요청이 올 때 만료를 뒤로 민다. 터미널만 쓰는 동안은 API 요청이 없으므로,
+// 최근에 사용자가 실제로 조작했을 때만 가볍게 핑을 보낸다 (방치된 탭은 연장하지 않음).
+let lastActivity = Date.now();
+let lastPing = Date.now();
+const markActive = () => { lastActivity = Date.now(); };
+for (const evName of ['keydown', 'pointerdown', 'touchstart', 'wheel']) window.addEventListener(evName, markActive, { passive: true, capture: true });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { markActive(); keepAlive(); } });
+async function keepAlive() {
+  if (!$('#view-login').hidden || lastActivity <= lastPing) return;
+  lastPing = Date.now();
+  try {
+    const r = await api('GET', 'api/me');
+    if (!r.authed) { disconnect(); showView('login'); toast('오래 사용하지 않아 로그아웃되었습니다.', 4000); }
+  } catch { /* 네트워크 오류는 무시 */ }
+}
+setInterval(keepAlive, 60 * 1000);
+
 function checkAuth() {
   return api('GET', 'api/me').then((r) => {
     setNeedCode(r.needCode);

@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
 <title>Web SSH</title>
 <link rel="stylesheet" href="vendor/xterm/css/xterm.css">
 <link rel="stylesheet" href="style.css">
@@ -142,6 +143,26 @@
         <div class="row tight"><input id="sec-code-disable" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"><button type="button" class="ghost danger" id="btn-totp-disable">해제</button></div>
       </div>
       <p class="muted" id="sec-private-only" hidden>OTP 설정 변경은 내부망/VPN 에서만 할 수 있습니다.</p>
+    </section>
+    <section class="sec-block">
+      <h4>푸시 알림 <span id="push-state" class="badge"></span></h4>
+      <p class="muted" id="push-help">Claude 작업 완료·입력 대기 등을 이 기기로 알려줍니다.</p>
+      <div class="row tight wrap" id="push-actions">
+        <button type="button" class="primary" id="btn-push-on">이 기기에서 받기</button>
+        <button type="button" class="ghost" id="btn-push-off" hidden>이 기기 끄기</button>
+        <button type="button" class="ghost" id="btn-push-test">테스트 알림</button>
+      </div>
+      <ul class="dev-list" id="push-subs"></ul>
+      <details class="hook">
+        <summary>Claude Code 연동 (훅)</summary>
+        <p class="muted">Claude 가 실행되는 PC(WSL 등)에서 아래 스크립트를 만들고 훅에 등록합니다. 토큰은 알림 전송에만 쓰이며, 새로 발급하면 이전 토큰은 무효가 됩니다.</p>
+        <div class="row tight wrap">
+          <select id="push-host"></select>
+          <button type="button" class="ghost" id="btn-push-token">토큰 발급</button>
+        </div>
+        <pre id="push-hook-cfg" hidden></pre>
+        <button type="button" class="ghost small" id="btn-push-copy" hidden>복사</button>
+      </details>
     </section>
     <section class="sec-block">
       <h4>세션</h4>
