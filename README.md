@@ -32,10 +32,18 @@ docker compose up -d --build  # 구버전: docker-compose up -d --build
 ```
 `http://<서버 IP>:8822` 접속 → 앱 비밀번호로 로그인 → **+ 호스트**.
 
+`gen-env.sh` 옵션
+```bash
+./gen-env.sh --password '내비밀번호'                       # 비밀번호 직접 지정 (생략 시 입력받거나 자동 생성)
+./gen-env.sh --domain ssh.example.synology.me --allow 203.0.113.7   # 외부 접속(웹 게이트웨이) 설정 포함
+./gen-env.sh -f                                           # 기존 .env 백업 후 다시 생성 (SECRET_KEY 도 바뀜!)
+```
+수동으로 하려면 `.env.example` 을 `.env` 로 복사해 수정하고 `mkdir -p ../web-ssh-data`.
+
 > 컨테이너는 `network_mode: host` 로 동작합니다 (WOL 브로드캐스트와 내부망 접근용).
 
 ### 시놀로지 Container Manager
-1. 이 폴더를 `/volume1/docker/web-ssh` 에 복사, `.env` 작성, `/volume1/docker/web-ssh-data` 폴더 생성
+1. 이 폴더를 `/volume1/docker/web-ssh` 에 복사 → SSH 로 `cd /volume1/docker/web-ssh && sh gen-env.sh`
 2. Container Manager → 프로젝트 → 생성 → 경로 지정 → 기존 `docker-compose.yml` 사용
 
 ### 로컬 실행 (개발)
