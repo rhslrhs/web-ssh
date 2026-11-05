@@ -645,6 +645,18 @@ function ensureTerm() {
   term.open($('#term'));
   term.onData((d) => { markActive(); sendInput(applyMods(d)); });
   term.onResize(({ cols, rows }) => wsSend({ t: 'resize', cols, rows }));
+  // OSC 52: 터미널 안의 앱(Claude Code, tmux, vim 등)이 보낸 "클립보드에 복사" 요청 처리.
+  // 클립보드 읽기 요청("?")은 보안상 무시한다.
+  term.parser.registerOscHandler(52, (data) => {
+    const i = data.indexOf(';');
+    const b64 = i < 0 ? '' : data.slice(i + 1);
+    if (!b64 || b64 === '?') return true;
+    try {
+      const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+      copyText(new TextDecoder().decode(bytes));
+    } catch { /* 잘못된 base64 무시 */ }
+    return true;
+  });
   term.attachCustomKeyEventHandler((ev) => {
     if (ev.type !== 'keydown' || !ev.ctrlKey || !ev.shiftKey) return true;
     if (ev.code === 'KeyC') { copyText(term.getSelection()); return false; }
@@ -728,18 +740,56 @@ if (window.visualViewport) {
   visualViewport.addEventListener('scroll', layoutViewport);
 }
 
-function copyText(text) {
-  if (!text) return;
-  const done = () => toast('복사됨', 1200);
-  if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done, () => {}); return; }
-  const ta = h('textarea', { style: 'position:fixed;opacity:0' });
-  ta.value = text;
-  document.body.append(ta);
-  ta.select();
-  try { document.execCommand('copy'); done(); } catch { /* ignore */ }
-  ta.remove();
-  if (term && !$('#view-term').hidden) focusInput();
+// 클립보드에 복사. 성공 여부를 알려준다 (http 주소에서는 브라우저가 자동 복사를 막을 수 있음)
+async function copyText(text, { quiet = false } = {}) {
+  if (!text) return false;
+  let ok = false;
+  if (navigator.clipboard && window.isSecureContext) {
+    try { await navigator.clipboard.writeText(text); ok = true; } catch { /* 아래 방법으로 재시도 */ }
+  }
+  if (!ok) {
+    const ta = h('textarea', { style: 'position:fixed;opacity:0', readonly: true });
+    ta.value = text;
+    document.body.append(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    ta.remove();
+    if (term && !$('#view-term').hidden && !$('#dlg-copy').open) focusInput();
+  }
+  if (ok) toast(`복사됨 (${text.length.toLocaleString()}자)`, 1500);
+  else if (!quiet) toast('브라우저가 자동 복사를 막았습니다. 📋 복사 모드에서 직접 복사하세요.', 4000);
+  return ok;
 }
+
+// ── 복사 모드: 터미널 글자를 일반 텍스트로 띄워 (모바일 길게 누르기 등으로) 선택·복사 ──
+function terminalText() {
+  const buf = term.buffer.active;
+  // 일반 셸은 스크롤 기록까지(최대 3000줄), 전체 화면 프로그램(tmux 등)은 현재 화면
+  const start = buf.type === 'normal' ? Math.max(0, buf.length - 3000) : buf.viewportY;
+  const end = buf.type === 'normal' ? buf.length : buf.viewportY + term.rows;
+  const lines = [];
+  for (let y = start; y < end; y++) {
+    const line = buf.getLine(y);
+    if (!line) continue;
+    const s = line.translateToString(true);
+    if (line.isWrapped && lines.length) lines[lines.length - 1] += s; else lines.push(s);
+  }
+  while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+  return lines.join('\n');
+}
+function openCopyMode() {
+  const ta = $('#copy-text');
+  ta.value = term ? terminalText() : '';
+  $('#dlg-copy').showModal();
+  ta.scrollTop = ta.scrollHeight;
+}
+$('#copy-all').addEventListener('click', async () => {
+  const ta = $('#copy-text');
+  const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+  if (await copyText(sel || ta.value)) $('#dlg-copy').close();
+});
+$('#copy-close').addEventListener('click', () => $('#dlg-copy').close());
+$('#dlg-copy').addEventListener('close', () => { if (!$('#view-term').hidden) focusInput(); });
 
 // 입력창을 쓰는 중이면 입력창, 아니면 터미널에 포커스
 function focusInput() { if (!$('#line-input').hidden) $('#line-text').focus(); else if (term) term.focus(); }
@@ -842,6 +892,8 @@ for (const b of document.querySelectorAll('.term-bar [data-act]')) {
       b.classList.toggle('on', !li.hidden);
       if (!li.hidden) $('#line-text').focus(); else term.focus();
       scheduleFit();
+    } else if (act === 'copy') {
+      openCopyMode();
     } else if (act === 'keys') {
       const kb = $('#keybar');
       kb.hidden = !kb.hidden;

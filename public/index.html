@@ -73,6 +73,7 @@
     <button class="ghost icon" data-act="font-" title="글자 작게">A−</button>
     <button class="ghost icon" data-act="font+" title="글자 크게">A+</button>
     <button class="ghost icon" data-act="input" title="입력창 (한글/붙여넣기)">⌨</button>
+    <button class="ghost icon" data-act="copy" title="복사 모드 (화면 글자 선택·복사)">📋</button>
     <button class="ghost icon" data-act="keys" title="특수키 바">Fn</button>
   </header>
   <div id="term-wrap">
@@ -204,6 +205,16 @@
     <p class="err" id="sec-err"></p>
     <div class="row end"><button type="button" class="ghost" id="btn-sec-close">닫기</button></div>
   </form>
+</dialog>
+
+<dialog id="dlg-copy" class="copy-dlg">
+  <h3>복사</h3>
+  <p class="muted">길게 눌러 원하는 부분을 선택하세요. 선택 없이 누르면 전체를 복사합니다.</p>
+  <textarea id="copy-text" readonly spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+  <div class="row end">
+    <button type="button" class="primary" id="copy-all">복사</button>
+    <button type="button" class="ghost" id="copy-close">닫기</button>
+  </div>
 </dialog>
 
 <dialog id="dlg-ask">
