@@ -668,7 +668,8 @@ function ensureTerm() {
   fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open($('#term'));
-  term.onData((d) => { markActive(); sendInput(applyMods(d)); });
+  // onData 는 원격 프로그램 질의에 대한 자동 응답(커서 위치·장치 속성·포커스 등)에도 발생하므로 활동으로 치지 않는다
+  term.onData((d) => { sendInput(applyMods(d)); });
   term.onResize(({ cols, rows }) => wsSend({ t: 'resize', cols, rows }));
   // OSC 52: 터미널 안의 앱(Claude Code, tmux, vim 등)이 보낸 "클립보드에 복사" 요청 처리.
   // 클립보드 읽기 요청("?")은 보안상 무시한다.
@@ -1051,7 +1052,8 @@ function route() {
 let lastActivity = Date.now();
 let lastPing = Date.now();
 const markActive = () => { lastActivity = Date.now(); };
-for (const evName of ['keydown', 'pointerdown', 'touchstart', 'wheel']) window.addEventListener(evName, markActive, { passive: true, capture: true });
+// 실제 사용자 조작만 활동으로 본다 (키보드·포인터·터치·휠·입력창 입력)
+for (const evName of ['keydown', 'pointerdown', 'touchstart', 'wheel', 'input']) window.addEventListener(evName, markActive, { passive: true, capture: true });
 document.addEventListener('visibilitychange', () => { if (!document.hidden) { markActive(); keepAlive(); } });
 async function keepAlive() {
   if (!$('#view-login').hidden || lastActivity <= lastPing) return;

@@ -326,10 +326,10 @@ wss.on('connection', (ws, req) => {
     try { m = JSON.parse(raw); } catch { return; }
     switch (m.t) {
       case 'i':
-        ws.lastActive = Date.now();
+        // 입력은 활동으로 치지 않는다: 터미널이 원격 질의에 자동으로 답한 것도 'i' 로 온다
         if (stream && typeof m.d === 'string') stream.write(m.d);
         break;
-      case 'active': // 브라우저에서 사용자가 조작 중 (스크롤·탭 등 입력이 아닌 활동)
+      case 'active': // 브라우저에서 사용자가 실제로 조작 중 (키보드·터치 등)
         ws.lastActive = Date.now();
         break;
       case 'resize':
@@ -351,6 +351,7 @@ wss.on('connection', (ws, req) => {
     }
   });
 
+  ws.endSsh = () => { closed = true; if (client) client.end(); };
   ws.on('close', () => {
     closed = true;
     for (const p of pending.values()) p.reject(new Error('closed'));
@@ -375,7 +376,9 @@ function closeExpiredTerminals() {
     const why = auth.wsSessionProblem(ws, now);
     if (!why) continue;
     if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'error', msg: why }));
+    if (ws.endSsh) ws.endSsh(); // SSH 는 바로 끊는다 (잃어버린 폰처럼 브라우저가 응답하지 않아도)
     ws.close(4001, 'session');
+    setTimeout(() => ws.terminate(), 1000).unref(); // 닫기 응답을 기다리지 않음
   }
 }
 auth.events.on('invalidate', closeExpiredTerminals);

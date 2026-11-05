@@ -332,20 +332,26 @@ async function testReview2() {
 
 async function testSessionAndPush() {
   console.log('[로그인 유지 / 푸시]');
-  // 유휴 3초, 최대 6초
-  let web = await startWeb({ SESSION_IDLE_MIN: '0.05', SESSION_MAX_HOURS: String(6 / 3600) });
+  // 유휴 15초(갱신은 5초 지난 토큰부터), 최대 30초. 서버가 쿠키에 기록한 로그인 시각(t0) 기준으로 기다린다.
+  // 지연은 "만료여야 함" 판정에는 안전하고 "유효해야 함" 판정에만 위험 → 유효 판정마다 4초 이상 여유.
+  let web = await startWeb({ SESSION_IDLE_MIN: '0.25', SESSION_MAX_HOURS: String(30 / 3600) });
   const first = await login({ password: 'testpassword' });
+  const t0 = Number(first.cookie.split('=')[1].split('.')[1]);
+  const at = (sec) => new Promise((res) => setTimeout(res, Math.max(0, t0 + sec * 1000 - Date.now())));
   const cookieOf = (r) => (r.headers.get('set-cookie') || '').split(';')[0];
-  await new Promise((r) => setTimeout(r, 1500));
-  let r = await fetch(base + '/api/hosts', { headers: { Cookie: first.cookie } });
+  const getHosts = (ck) => fetch(base + '/api/hosts', { headers: { Cookie: ck } });
+  await at(7);                                   // 첫 쿠키 만료 t0+15 (여유 8초)
+  let r = await getHosts(first.cookie);
   const renewed = cookieOf(r);
   assert(r.status === 200 && renewed.startsWith('wssh=') && renewed !== first.cookie); ok('활동하면 새 만료 시각으로 쿠키 갱신');
-  await new Promise((r) => setTimeout(r, 2000)); // 최초 로그인 3.5초 후
-  assert.strictEqual((await fetch(base + '/api/hosts', { headers: { Cookie: first.cookie } })).status, 401); ok('갱신 안 된 쿠키는 유휴 시간 후 만료');
-  r = await fetch(base + '/api/hosts', { headers: { Cookie: renewed } });
+  await at(17);                                  // 첫 쿠키는 만료, 갱신 쿠키는 t0+22 까지 (여유 5초)
+  assert.strictEqual((await getHosts(first.cookie)).status, 401); ok('갱신 안 된 쿠키는 유휴 시간 후 만료');
+  r = await getHosts(renewed);
   assert.strictEqual(r.status, 200); ok('갱신된 쿠키는 유효 (쓰는 동안 연장)');
   let c = cookieOf(r) || renewed;
-  for (let i = 0; i < 3; i++) { await new Promise((res) => setTimeout(res, 1200)); r = await fetch(base + '/api/hosts', { headers: { Cookie: c } }); c = cookieOf(r) || c; }
+  for (const sec of [21, 26]) { await at(sec); r = await getHosts(c); assert.strictEqual(r.status, 200, `t0+${sec}`); c = cookieOf(r) || c; }
+  await at(32);                                  // 최대 기간 t0+30
+  r = await getHosts(c);
   assert.strictEqual(r.status, 401, '최대 기간 초과'); ok('계속 써도 최대 기간이 지나면 만료');
   const me = await (await fetch(base + '/api/me', { headers: { Cookie: c } })).json();
   assert.strictEqual(me.authed, false);
@@ -550,7 +556,7 @@ function rawRequest(method, pathname, headers, body) {
 async function testReview3() {
   console.log('[터미널 세션 만료 / 공개 주소 / 횟수 제한]');
   // 유휴 3초: 조작 없는 터미널은 서버가 닫음, 전체 로그아웃은 즉시 닫음
-  let web = await startWeb({ SESSION_IDLE_MIN: '0.05' });
+  let web = await startWeb({ SESSION_IDLE_MIN: '0.1' });
   let { cookie } = await login({ password: 'testpassword' });
   const hst = await (await post('/api/hosts', { name: 'h', host: '127.0.0.1', port: SSH_PORT, username: 'test', authType: 'password', password: 'secret' }, { Cookie: cookie })).json();
   const openWs = (ck) => new Promise((resolve) => {
@@ -562,13 +568,17 @@ async function testReview3() {
   let c1 = await openWs(cookie);
   const t0 = Date.now();
   // 활동 신호를 계속 보내면 유지
-  const keep = setInterval(() => c1.w.readyState === 1 && c1.w.send(JSON.stringify({ t: 'active' })), 700);
-  await new Promise((r) => setTimeout(r, 4000));
+  const keep = setInterval(() => c1.w.readyState === 1 && c1.w.send(JSON.stringify({ t: 'active' })), 1000);
+  // 터미널 자동 응답(입력 'i')은 활동이 아니다 — 보내도 유휴 판정에 영향 없음
+  const noise = setInterval(() => c1.w.readyState === 1 && c1.w.send(JSON.stringify({ t: 'i', d: '\x1b[1;1R' })), 500);
+  await new Promise((r) => setTimeout(r, 8000));
   assert.strictEqual(c1.w.readyState, 1); ok('조작(활동 신호)이 있으면 유휴 시간이 지나도 터미널 유지');
   clearInterval(keep);
+  const tStop = Date.now();
   const code1 = await c1.closed;
+  clearInterval(noise);
   assert.strictEqual(code1, 4001); assert(c1.msgs.some((m) => m.t === 'error' && /오래 사용하지 않아/.test(m.msg)));
-  assert(Date.now() - t0 > 4000); ok('조작 없이 유휴 시간이 지나면 서버가 터미널을 닫음');
+  assert(Date.now() - tStop >= 4000, '자동 응답이 활동으로 계산되면 안 됨'); ok('조작 없이 유휴 시간이 지나면 서버가 터미널을 닫음 (자동 응답은 활동 아님)');
   await stopWeb(web);
 
   web = await startWeb({});
