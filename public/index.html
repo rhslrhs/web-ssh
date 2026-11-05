@@ -48,6 +48,23 @@
   <main id="host-list" class="list"></main>
 </section>
 
+<section id="view-wake" class="view center" hidden>
+  <div class="card wake">
+    <div class="wake-icon" id="wake-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+    </div>
+    <h2 class="wake-title" id="wake-title">PC 켜기</h2>
+    <p class="wake-msg" id="wake-msg"></p>
+    <div class="wake-choose" id="wake-choose" hidden></div>
+    <div class="row center-row">
+      <button type="button" class="primary" id="wake-connect" hidden>지금 접속</button>
+      <a class="btn ghost" href="#/">목록</a>
+    </div>
+    <button type="button" class="linklike" id="wake-other" hidden>다른 PC 선택</button>
+    <p class="muted wake-tip">팁: 홈 화면의 앱 아이콘을 길게 누르면 "PC 켜기" 바로가기가 있습니다.</p>
+  </div>
+</section>
+
 <section id="view-term" class="view" hidden>
   <header class="topbar term-bar">
     <a href="#/" class="btn ghost icon" title="목록으로 (연결 종료)">←</a>

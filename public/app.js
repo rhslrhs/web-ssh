@@ -42,7 +42,7 @@ async function api(method, url, body) {
 }
 
 function showView(name) {
-  for (const v of ['login', 'list', 'term']) $('#view-' + v).hidden = v !== name;
+  for (const v of ['login', 'list', 'term', 'wake']) $('#view-' + v).hidden = v !== name;
   if (name === 'login') { disconnect(); setTimeout(() => $('#login-pw').focus(), 0); }
 }
 
@@ -235,23 +235,86 @@ function hostCard(x) {
         jump ? h('span', { class: 'badge' }, '경유: ' + jump.name) : null,
         x.command ? h('span', { class: 'badge cmd', title: x.command }, '▶ ' + x.command) : null)),
     h('div', { class: 'host-actions' },
-      x.mac ? h('button', { title: 'Wake-on-LAN', onclick: () => wakeHost(x) }, '켜기') : null,
+      x.mac ? h('button', { title: 'Wake-on-LAN: 켜고 접속', onclick: () => { location.hash = '#/wake/' + encodeURIComponent(x.id); } }, '켜기') : null,
       h('button', { onclick: () => openEditor(x) }, '편집')));
 }
 
-async function wakeHost(x) {
-  try {
-    await api('POST', `api/hosts/${x.id}/wake`);
-  } catch (e) { return toast(e.message); }
-  toast(`${x.name}: 켜기 신호 전송 — 부팅을 기다리는 중...`, 8000);
-  for (let i = 0; i < 60; i++) {
-    await new Promise((r) => setTimeout(r, 3000));
-    if ($('#view-list').hidden) return;
-    const { online } = await api('GET', `api/hosts/${x.id}/status`).catch(() => ({}));
-    if (online) { toast(`${x.name}: 온라인 ✓  눌러서 접속하세요`, 6000); refreshStatus(); return; }
-  }
-  toast(`${x.name}: 3분 동안 응답이 없습니다. BIOS/NIC 의 WOL 설정을 확인하세요.`, 8000);
+// ── PC 켜기 (WOL → 부팅 대기 → 자동 접속). #/wake 또는 #/wake/<호스트 id> ──
+let wakeRun = 0;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function setWake(msg, state) {
+  $('#wake-msg').textContent = msg;
+  $('#wake-icon').className = 'wake-icon' + (state ? ' ' + state : '');
 }
+const mmss = (ms) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+async function openWake(id) {
+  const run = ++wakeRun;
+  showView('wake');
+  document.title = 'PC 켜기 — Web SSH';
+  $('#wake-choose').hidden = true;
+  $('#wake-connect').hidden = true;
+  $('#wake-other').hidden = true;
+  $('#wake-title').textContent = 'PC 켜기';
+  setWake('', '');
+  try { hosts = await api('GET', 'api/hosts'); } catch { return; }
+  if (run !== wakeRun) return;
+  const cands = hosts.filter((x) => x.mac);
+  let host = id ? hosts.find((x) => x.id === id) : null;
+  if (!host && !id) host = cands.find((x) => x.id === store.get('wakeHost', '')) || (cands.length === 1 ? cands[0] : null);
+
+  if (!host) {
+    if (!cands.length) return setWake('WOL MAC 이 설정된 호스트가 없습니다.\n호스트 편집에서 "WOL MAC" 을 입력하세요.', 'err');
+    $('#wake-title').textContent = '켤 PC 선택';
+    setWake('선택한 PC 는 다음부터 바로 켜집니다.', '');
+    $('#wake-choose').replaceChildren(...cands.map((x) => h('button', { type: 'button', class: 'ghost', onclick: () => {
+      store.set('wakeHost', x.id);
+      location.hash = '#/wake/' + encodeURIComponent(x.id);
+    } }, h('b', {}, x.name), h('small', { class: 'muted' }, x.host))));
+    $('#wake-choose').hidden = false;
+    return;
+  }
+  $('#wake-title').textContent = host.name;
+  $('#wake-other').hidden = cands.length < 2;
+  const go = () => { if (run === wakeRun) location.hash = '#/term/' + encodeURIComponent(host.id); };
+  $('#wake-connect').onclick = go;
+
+  setWake('상태 확인 중…', 'busy');
+  let st = await api('GET', `api/hosts/${host.id}/status`).catch(() => ({}));
+  if (run !== wakeRun) return;
+  if (st.online) { setWake('이미 켜져 있습니다. 접속합니다…', 'ok'); await sleep(600); return go(); }
+  if (!host.mac) return setWake('이 호스트에는 WOL MAC 이 없습니다.', 'err');
+  try { await api('POST', `api/hosts/${host.id}/wake`); } catch (e) { return setWake(e.message, 'err'); }
+  $('#wake-connect').hidden = false;
+  const t0 = Date.now();
+  let resent = false;
+  // 경과 시간은 1초마다 갱신 (상태 확인과 별개)
+  const showWait = () => { if (run === wakeRun) setWake(`켜기 신호를 보냈습니다.\n부팅을 기다리는 중… ${mmss(Date.now() - t0)}`, 'busy'); };
+  showWait();
+  const ticker = setInterval(() => { if (run !== wakeRun) clearInterval(ticker); else showWait(); }, 1000);
+  try {
+    while (Date.now() - t0 < 180e3) {
+      await sleep(2500);
+      if (run !== wakeRun) return;
+      st = await api('GET', `api/hosts/${host.id}/status`).catch(() => ({}));
+      if (run !== wakeRun) return;
+      if (st.online) {
+        clearInterval(ticker);
+        setWake('켜졌습니다! 접속합니다…', 'ok');
+        await sleep(2000); // SSH 서버가 완전히 뜰 시간
+        return go();
+      }
+      // 첫 신호를 놓쳤을 수 있으니 20초 후 한 번 더
+      if (!resent && Date.now() - t0 > 20e3) { resent = true; api('POST', `api/hosts/${host.id}/wake`).catch(() => {}); }
+    }
+  } finally { clearInterval(ticker); }
+  if (run !== wakeRun) return;
+  setWake('3분 동안 응답이 없습니다.\nBIOS·랜카드의 Wake on LAN 설정과\nWindows "빠른 시작" 끄기를 확인하세요.', 'err');
+}
+$('#wake-other').addEventListener('click', () => {
+  store.set('wakeHost', '');
+  if (location.hash === '#/wake') openWake(null); else location.hash = '#/wake';
+});
 
 // ── 호스트 편집 ──
 let editing = null;
@@ -807,6 +870,9 @@ buildKeybar();
 function route() {
   const m = location.hash.match(/^#\/term\/(.+)$/);
   if (m) { clearInterval(statusTimer); openTerm(decodeURIComponent(m[1])); return; }
+  wakeRun++; // 켜기 화면을 벗어나면 대기 중단
+  const w = location.hash.match(/^#\/wake(?:\/(.+))?$/);
+  if (w) { clearInterval(statusTimer); disconnect(); openWake(w[1] ? decodeURIComponent(w[1]) : null); return; }
   disconnect();
   document.title = 'Web SSH';
   showView('list');
