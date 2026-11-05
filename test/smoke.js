@@ -368,9 +368,11 @@ async function testSessionAndPush() {
 
   r = await post('/api/notify', { hook_event_name: 'Stop' });
   assert.strictEqual(r.status, 401); ok('토큰 없는 알림 요청 거부');
-  r = await post('/api/push/token', {}, { ...A, 'X-Real-IP': '203.0.113.7' });
-  assert(r.status === 200 || r.status === 403); // TRUST_PROXY 꺼짐 → 헤더 무시, 루프백이라 허용
-  const { token } = await (await post('/api/push/token', {}, A)).json();
+  assert.strictEqual((await post('/api/push/token', {}, A)).status, 404); ok('토큰을 브라우저로 돌려주는 API 없음 (한 줄 설치 / CLI 로만 발급)');
+  const issueCli = () => require('child_process').execFileSync(process.execPath, [path.join(APP, 'bin/notify-token.js')], {
+    env: { ...process.env, APP_PASSWORD: 'testpassword', DATA_DIR: web.dataDir, SECRET_KEY: '' },
+  }).toString().trim();
+  const token = issueCli();
   assert(/^wsn_/.test(token));
   r = await post('/api/notify', { hook_event_name: 'Stop', cwd: '/home/u/proj' }, { Authorization: 'Bearer ' + token });
   assert.deepStrictEqual(await r.json(), { sent: 0, removed: 0, failed: 0 }); ok('토큰으로 알림 요청 (구독 0대)');

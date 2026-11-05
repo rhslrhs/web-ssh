@@ -157,8 +157,7 @@ api.get('/push', pushWrap(() => ({ publicKey: push.publicKey(), subs: push.list(
 api.post('/push/subscribe', pushWrap((req) => push.subscribe((req.body || {}).subscription, (req.body || {}).label, (req.body || {}).replaceId)));
 api.delete('/push/subs/:id', pushWrap((req) => ({ ok: push.remove(req.params.id) })));
 api.post('/push/test', pushWrap(() => push.send({ title: 'Web SSH', body: '테스트 알림입니다 🔔', url: './', tag: 'test' })));
-// 토큰 발급 / 설치 코드는 내부망/VPN 에서만 (기존 토큰은 무효)
-api.post('/push/token', auth.requirePrivate, pushWrap(() => ({ token: notifyToken.issue() })));
+// 설치 코드는 내부망/VPN 에서만. 토큰 자체는 브라우저로 보내지 않는다 (설치 스크립트 / CLI 로만 발급)
 api.post('/push/setup', auth.requirePrivate, pushWrap((req) => {
   const code = require('crypto').randomBytes(12).toString('base64url');
   const hostId = String((req.body || {}).hostId || '');

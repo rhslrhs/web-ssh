@@ -1,0 +1,17 @@
+#!/bin/bash -l
+# web-ssh 등에서 접속할 때: tmux 세션에 붙는다. 세션이 없으면 만들고 그 안에서 claude 를 실행.
+#   claude 가 끝나도 셸로 남아 세션이 유지된다.
+#   사용: claude-tmux [작업폴더] [세션이름] [claude 옵션...]
+#     claude-tmux                          → 홈 폴더에서 새 대화
+#     claude-tmux ~/project claude -c → 마지막 대화 이어서
+#     claude-tmux ~/project claude -r → 이어갈 대화 고르기
+#   ※ 세션이 이미 있으면 거기에 붙기만 하고 옵션은 무시된다.
+DIR="${1:-$HOME}"
+NAME="${2:-claude}"
+# Windows 등에서 넘어온 "~" 가 펼쳐지지 않은 경우 대비
+DIR="${DIR/#\~/$HOME}"
+[ $# -gt 2 ] && shift 2 || set --
+MODE=-A
+[ -n "$TMUX_DETACHED_TEST" ] && MODE=-d # 테스트용: 붙지 않고 백그라운드로 세션만 만든다
+# 명령을 여러 인자로 넘기면 tmux 가 셸 해석 없이 실행 → 옵션 따옴표 문제 없음
+exec tmux new-session $MODE -s "$NAME" -c "$DIR" bash -lc 'claude "$@"; exec bash -l' claude-tmux "$@"
