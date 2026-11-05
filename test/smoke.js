@@ -382,23 +382,32 @@ async function testSessionAndPush() {
   assert.strictEqual(r.status, 401); ok('틀린 토큰 거부');
   assert.strictEqual((await fetch(base + '/api/hosts', { headers: { Authorization: 'Bearer ' + token } })).status, 401); ok('알림 토큰으로는 다른 API 사용 불가');
 
-  // CLI 재발급 → 실행 중 서버에 바로 반영, 이전 토큰 무효
-  const out = require('child_process').execFileSync(process.execPath, [path.join(APP, 'bin/notify-token.js')], {
+  // CLI 발급 → 실행 중 서버에 바로 반영, 기존 토큰도 유지 (여러 PC)
+  const out = require('child_process').execFileSync(process.execPath, [path.join(APP, 'bin/notify-token.js'), 'PC-B'], {
     env: { ...process.env, APP_PASSWORD: 'testpassword', DATA_DIR: web.dataDir, SECRET_KEY: '' },
   }).toString().trim();
   assert(/^wsn_/.test(out) && out !== token);
-  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + token })).status, 401);
-  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + out })).status, 200); ok('CLI 토큰 재발급 즉시 반영, 이전 토큰 무효');
+  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + token })).status, 200);
+  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + out })).status, 200); ok('토큰 여러 개 공존 (PC A 를 설치해도 PC B 알림이 끊기지 않음)');
+  let pinfo = await (await fetch(base + '/api/push', { headers: A })).json();
+  assert(pinfo.tokens.some((x) => x.label === 'PC-B') && pinfo.tokens.every((x) => !('hash' in x))); ok('설정 화면 토큰 목록 (해시는 내보내지 않음)');
+  const pcB = pinfo.tokens.find((x) => x.label === 'PC-B');
+  r = await fetch(base + '/api/push/tokens/' + pcB.id, { method: 'DELETE', headers: { ...H, ...A } });
+  assert((await r.json()).ok);
+  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + out })).status, 401); ok('토큰 개별 삭제');
   // 한 줄 설치: 1회용 코드 → curl | sh → 스크립트 + 훅 등록 + 새 토큰
   const fakeHome = newDataDir();
   fs.mkdirSync(path.join(fakeHome, '.claude'));
   fs.writeFileSync(path.join(fakeHome, '.claude/settings.json'), JSON.stringify({ theme: 'dark', hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo keep' }] }] } }));
   const { code } = await (await post('/api/push/setup', { hostId: '' }, A)).json();
   const runSetup = (c) => new Promise((resolve) => {
-    const p = spawn('sh', ['-c', `curl -fsS '${base}/api/notify/setup/${c}' | sh`], { env: { ...process.env, HOME: fakeHome } });
+    const p = spawn('sh', ['-c', `curl -fsS -X POST '${base}/api/notify/setup/${c}' | sh`], { env: { ...process.env, HOME: fakeHome } });
     let o = ''; p.stdout.on('data', (d) => { o += d; }); p.stderr.on('data', (d) => { o += d; });
     p.on('exit', (exitCode) => resolve({ exitCode, o }));
   });
+  // GET(링크 미리보기 봇 등)은 코드를 쓰지 않는다
+  const peekRes = await (await fetch(`${base}/api/notify/setup/${code}`)).text();
+  assert(/POST/.test(peekRes) && /exit 1/.test(peekRes)); ok('설치 주소를 GET 으로 열면 안내만 하고 코드는 그대로');
   let rs = await runSetup(code);
   assert.strictEqual(rs.exitCode, 0, rs.o); assert(/연동 완료/.test(rs.o));
   const settings = JSON.parse(fs.readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
@@ -410,8 +419,8 @@ async function testSessionAndPush() {
   const newTok = script.match(/Bearer (wsn_[A-Za-z0-9_-]+)/)[1];
   assert.notStrictEqual(newTok, out);
   assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + newTok })).status, 200);
-  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + out })).status, 401);
-  ok('한 줄 설치: 스크립트 생성 · 기존 설정 보존하며 훅 추가 · 새 토큰 발급');
+  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + token })).status, 200); // 다른 PC 토큰은 그대로
+  ok('한 줄 설치: 스크립트 생성 · 기존 설정 보존하며 훅 추가 · 새 토큰 발급 (다른 PC 토큰 유지)');
   rs = await runSetup(code);
   assert.notStrictEqual(rs.exitCode, 0); assert(/만료|이미 사용/.test(rs.o)); ok('설치 코드는 1회용');
   // 다시 설치해도 훅이 중복되지 않음
@@ -419,6 +428,10 @@ async function testSessionAndPush() {
   rs = await runSetup(code2);
   const s2 = JSON.parse(fs.readFileSync(path.join(fakeHome, '.claude/settings.json'), 'utf8'));
   assert.strictEqual(s2.hooks.Stop.length, 2); assert.strictEqual(s2.hooks.Notification.length, 1); ok('재설치 시 훅 중복 없음 (토큰만 교체)');
+  const tok2 = fs.readFileSync(path.join(fakeHome, '.claude/web-ssh-notify.sh'), 'utf8').match(/Bearer (wsn_[A-Za-z0-9_-]+)/)[1];
+  assert(/이전 알림 토큰을 폐기/.test(rs.o), rs.o);
+  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + newTok })).status, 401);
+  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + tok2 })).status, 200); ok('같은 PC 재설치 → 그 PC 의 이전 토큰만 폐기');
 
   assert.strictEqual((await fetch(base + '/sw.js')).status, 200);
   assert.strictEqual((await fetch(base + '/icon-192.png')).status, 200); ok('서비스 워커 / 아이콘 제공');
@@ -522,6 +535,83 @@ async function testPasskey() {
   await stopWeb(web);
 }
 
+// Host 헤더를 직접 지정하는 요청 (fetch 는 Host 를 바꿀 수 없음)
+function rawRequest(method, pathname, headers, body) {
+  return new Promise((resolve, reject) => {
+    const req = require('http').request({ host: '127.0.0.1', port: WEB_PORT, method, path: pathname, headers }, (res) => {
+      let d = ''; res.on('data', (c) => { d += c; }); res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: d }));
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function testReview3() {
+  console.log('[터미널 세션 만료 / 공개 주소 / 횟수 제한]');
+  // 유휴 3초: 조작 없는 터미널은 서버가 닫음, 전체 로그아웃은 즉시 닫음
+  let web = await startWeb({ SESSION_IDLE_MIN: '0.05' });
+  let { cookie } = await login({ password: 'testpassword' });
+  const hst = await (await post('/api/hosts', { name: 'h', host: '127.0.0.1', port: SSH_PORT, username: 'test', authType: 'password', password: 'secret' }, { Cookie: cookie })).json();
+  const openWs = (ck) => new Promise((resolve) => {
+    const w = new WebSocket(`ws://127.0.0.1:${WEB_PORT}/ws`, { headers: { Cookie: ck, Origin: base } });
+    const msgs = [];
+    w.on('message', (d, bin) => { if (!bin) msgs.push(JSON.parse(d)); });
+    w.on('open', () => resolve({ w, msgs, closed: new Promise((r) => w.on('close', (code) => r(code))) }));
+  });
+  let c1 = await openWs(cookie);
+  const t0 = Date.now();
+  // 활동 신호를 계속 보내면 유지
+  const keep = setInterval(() => c1.w.readyState === 1 && c1.w.send(JSON.stringify({ t: 'active' })), 700);
+  await new Promise((r) => setTimeout(r, 4000));
+  assert.strictEqual(c1.w.readyState, 1); ok('조작(활동 신호)이 있으면 유휴 시간이 지나도 터미널 유지');
+  clearInterval(keep);
+  const code1 = await c1.closed;
+  assert.strictEqual(code1, 4001); assert(c1.msgs.some((m) => m.t === 'error' && /오래 사용하지 않아/.test(m.msg)));
+  assert(Date.now() - t0 > 4000); ok('조작 없이 유휴 시간이 지나면 서버가 터미널을 닫음');
+  await stopWeb(web);
+
+  web = await startWeb({});
+  ({ cookie } = await login({ password: 'testpassword' }));
+  const c2 = await openWs(cookie);
+  const c3 = await openWs(cookie);
+  const t1 = Date.now();
+  await post('/api/security/logout-all', {}, { Cookie: cookie });
+  assert.strictEqual(await c2.closed, 4001); assert.strictEqual(await c3.closed, 4001);
+  assert(Date.now() - t1 < 1500 && c2.msgs.some((m) => m.t === 'error' && /전체 로그아웃/.test(m.msg))); ok('전체 로그아웃 → 열린 터미널 모두 즉시 끊김');
+  await stopWeb(web);
+
+  // PUBLIC_ORIGIN 으로 들어온 요청: 설치 스크립트는 https 공개 주소, 쿠키는 Secure
+  web = await startWeb({ PUBLIC_ORIGIN: 'https://ws.example.com' });
+  const lg = await rawRequest('POST', '/api/login', { Host: 'ws.example.com', 'Content-Type': 'application/json' }, JSON.stringify({ password: 'testpassword' }));
+  const setCookie = String(lg.headers['set-cookie']);
+  assert(/Secure/.test(setCookie), setCookie); ok('PUBLIC_ORIGIN(https) 으로 들어온 로그인 → Secure 쿠키 (프록시 헤더 없어도)');
+  const ck = setCookie.split(';')[0];
+  const sc = await rawRequest('POST', '/api/push/setup', { Host: 'ws.example.com', 'Content-Type': 'application/json', Origin: 'https://ws.example.com', Cookie: ck }, '{}');
+  const { code } = JSON.parse(sc.body);
+  const scr = await rawRequest('POST', `/api/notify/setup/${code}`, { Host: 'ws.example.com' });
+  assert(scr.body.includes("'https://ws.example.com/api/notify'") && !scr.body.includes('http://ws.example.com'), scr.body.slice(0, 400)); ok('설치 스크립트 주소에 https 공개 주소 사용');
+  const lgLan = await login({ password: 'testpassword' });
+  assert(lgLan.status === 200);
+  await stopWeb(web);
+
+  // 패스키 로그인 옵션: IP 당 분당 20회
+  web = await startWeb({ PASSKEY_ORIGINS: base });
+  const codes = [];
+  for (let i = 0; i < 23; i++) codes.push((await post('/api/passkey/login/options', {})).status);
+  assert(codes.slice(0, 20).every((c) => c === 200) && codes.slice(20).every((c) => c === 429), codes.join(',')); ok('패스키 로그인 옵션 요청 IP 당 분당 20회 제한');
+  await stopWeb(web);
+
+  // 이전 형식 토큰 파일 자동 변환
+  const dir = newDataDir();
+  const crypto = require('crypto');
+  const oldTok = 'wsn_' + 'x'.repeat(32);
+  fs.writeFileSync(path.join(dir, 'notify-token.json'), JSON.stringify({ hash: crypto.createHash('sha256').update(oldTok).digest('hex'), created: 1 }));
+  web = await startWeb({}, dir);
+  assert.strictEqual((await post('/api/notify', {}, { Authorization: 'Bearer ' + oldTok })).status, 200); ok('이전 형식(토큰 1개) 파일도 그대로 동작');
+  await stopWeb(web);
+}
+
 function testTotpUnit() {
   console.log('[TOTP]');
   // RFC 6238 테스트 벡터 (SHA1, 비밀키 "12345678901234567890")
@@ -542,6 +632,7 @@ function testTotpUnit() {
     await testReview2();
     await testSessionAndPush();
     await testPasskey();
+    await testReview3();
     console.log('ALL PASSED');
     process.exitCode = 0;
   } catch (e) {

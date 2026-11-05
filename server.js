@@ -43,17 +43,33 @@ app.post('/api/logout', auth.logout);
 app.get('/api/me', auth.me);
 
 // ── 패스키 로그인 (인증 전) ──
+// 인증 없이 부를 수 있어, 대량 요청으로 정상 사용자의 챌린지를 밀어내지 못하게 IP 당 분당 20회로 제한
+const pkOptHits = new Map(); // ip -> [시각...]
+setInterval(() => { const now = Date.now(); for (const [ip, ts] of pkOptHits) { const k = ts.filter((t) => now - t < 60e3); k.length ? pkOptHits.set(ip, k) : pkOptHits.delete(ip); } }, 60e3).unref();
 app.post('/api/passkey/login/options', async (req, res) => {
+  const ip = auth.clientIp(req);
+  const now = Date.now();
+  const hits = (pkOptHits.get(ip) || []).filter((t) => now - t < 60e3);
+  if (hits.length >= 20) return res.status(429).json({ error: '요청이 너무 많습니다. 잠시 후 다시 시도하세요.' });
+  hits.push(now);
+  pkOptHits.set(ip, hits);
   try { res.json(await passkey.loginOptions(req)); } catch (e) { res.status(e instanceof passkey.PasskeyError ? 400 : 500).json({ error: e.message }); }
 });
 app.post('/api/passkey/login/verify', auth.loginPasskey);
 
 // ── Claude Code 연동 설치: 화면에서 만든 1회용 코드(10분)로 설치 스크립트를 받는다 ──
-//   curl -fsS '<주소>/api/notify/setup/<코드>' | sh
-// 실행하면 새 알림 토큰 발급 + ~/.claude/web-ssh-notify.sh 생성 + settings.json 훅 등록 + 테스트 알림
+//   curl -fsS -X POST '<주소>/api/notify/setup/<코드>' | sh
+// 실행하면 새 알림 토큰 발급 + ~/.claude/web-ssh-notify.sh 생성 + settings.json 훅 등록
+// + (같은 PC 에 다시 설치하면) 그 PC 의 이전 토큰 폐기 + 테스트 알림
+// POST 로만 받는다: 메신저 링크 미리보기 봇이 GET 으로 먼저 열어 코드를 써 버리는 일을 막기 위해.
 const setupCodes = new Map(); // code -> { until, hostId }
 const shq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`; // sh 작은따옴표 인용
+// 외부에 보여 줄 주소: PUBLIC_ORIGIN 으로 들어온 요청이면 그것(https)을, 아니면 요청 그대로
+const publicBase = (req) => (auth.viaPublicOrigin(req) ? config.PUBLIC_ORIGIN : `${req.protocol}://${req.headers.host}`);
 app.get('/api/notify/setup/:code', (req, res) => {
+  res.type('text/plain; charset=utf-8').send("echo '✗ 설치 명령은 curl -X POST 로 실행해야 합니다. web-ssh ⚙ 설정에 나온 명령을 그대로 복사하세요.' >&2; exit 1\n");
+});
+app.post('/api/notify/setup/:code', (req, res) => {
   const now = Date.now();
   for (const [c, v] of setupCodes) if (v.until < now) setupCodes.delete(c);
   const entry = setupCodes.get(req.params.code);
@@ -61,16 +77,20 @@ app.get('/api/notify/setup/:code', (req, res) => {
   // curl -f 는 4xx 본문을 버리고 sh 는 빈 입력에 성공(0)하므로, 200 + 실패 스크립트로 안내한다
   if (!entry) return res.send("echo '✗ 설치 코드가 만료되었거나 이미 사용되었습니다. web-ssh ⚙ 설정에서 새로 만드세요.' >&2; exit 1\n");
   setupCodes.delete(req.params.code); // 1회용
-  const token = notifyToken.issue();
-  const base = `${req.protocol}://${req.headers.host}`;
+  const host = entry.hostId ? store.get(entry.hostId) : null;
+  const ip = auth.clientIp(req);
+  const token = notifyToken.issue(`${host ? host.name : '알림'} · ${ip} · ${new Date().toLocaleDateString('ko-KR')}`);
+  const base = publicBase(req);
   const url = `${base}/api/notify${entry.hostId ? `?host=${encodeURIComponent(entry.hostId)}` : ''}`;
-  console.log(`[web-ssh] Claude 연동 설치 ${auth.clientIp(req)} (토큰 재발급)`);
+  console.log(`[web-ssh] Claude 연동 설치 ${ip} (토큰 발급)`);
   res.send(`#!/bin/sh
 # web-ssh: Claude Code 알림 연동 설치
 set -e
 command -v curl >/dev/null 2>&1 || { echo 'curl 이 필요합니다' >&2; exit 1; }
 D="$HOME/.claude"; mkdir -p "$D"
 umask 077
+# 이 PC 에 예전에 설치한 토큰 (새 토큰으로 바꾼 뒤 서버에서 폐기)
+OLD=""; [ -f "$D/web-ssh-notify.sh" ] && OLD=$(grep -o 'Bearer wsn_[A-Za-z0-9_-]*' "$D/web-ssh-notify.sh" | head -1 | cut -d' ' -f2) || true
 cat > "$D/web-ssh-notify.sh" <<'WSSH_EOF'
 #!/bin/sh
 # Claude Code 훅 → web-ssh 푸시 (재설치: web-ssh ⚙ 설정 → Claude Code 연동)
@@ -106,10 +126,18 @@ fs.writeFileSync(p, JSON.stringify(s, null, 2));
 else
   echo 'python3 또는 node 가 없어 훅을 자동 등록하지 못했습니다. ~/.claude/settings.json 의 hooks 에 Stop/Notification → "sh ~/.claude/web-ssh-notify.sh" 를 추가하세요.' >&2
 fi
+if [ -n "$OLD" ]; then
+  curl -fsS -m 5 -X POST ${shq(base + '/api/notify/revoke')} -H "Authorization: Bearer $OLD" >/dev/null 2>&1 && echo '  이 PC 의 이전 알림 토큰을 폐기했습니다.' || true
+fi
 echo '{"hook_event_name":"Notification","message":"Claude Code 알림 연동 완료"}' | sh "$D/web-ssh-notify.sh"
 echo '✓ web-ssh 알림 연동 완료 — 등록된 기기로 테스트 알림을 보냈습니다.'
 echo '  새로 시작하는 Claude 세션부터 적용됩니다 (실행 중인 세션은 /hooks 를 한 번 열면 적용).'
 `);
+});
+
+app.post('/api/notify/revoke', (req, res) => {
+  const h = String(req.headers.authorization || '');
+  res.json({ ok: notifyToken.revoke(h.startsWith('Bearer ') ? h.slice(7).trim() : '') });
 });
 
 // ── 외부 스크립트(Claude Code 훅 등) → 푸시. 로그인 쿠키가 아닌 알림 전용 토큰으로 인증 ──
@@ -153,7 +181,8 @@ api.delete('/passkey/:id', auth.requirePrivate, pkWrap((req) => ({ ok: passkey.r
 const pushWrap = (fn) => async (req, res) => {
   try { res.json(await fn(req, res)); } catch (e) { res.status(e instanceof push.PushError ? 400 : 500).json({ error: e.message }); }
 };
-api.get('/push', pushWrap(() => ({ publicKey: push.publicKey(), subs: push.list(), token: notifyToken.info() })));
+api.get('/push', pushWrap(() => ({ publicKey: push.publicKey(), subs: push.list(), token: notifyToken.info(), tokens: notifyToken.list() })));
+api.delete('/push/tokens/:id', pushWrap((req) => ({ ok: notifyToken.remove(req.params.id) })));
 api.post('/push/subscribe', pushWrap((req) => push.subscribe((req.body || {}).subscription, (req.body || {}).label, (req.body || {}).replaceId)));
 api.delete('/push/subs/:id', pushWrap((req) => ({ ok: push.remove(req.params.id) })));
 api.post('/push/test', pushWrap(() => push.send({ title: 'Web SSH', body: '테스트 알림입니다 🔔', url: './', tag: 'test' })));
@@ -211,11 +240,16 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 server.on('upgrade', (req, socket, head) => {
   const { pathname } = new URL(req.url, 'http://x');
   if (pathname !== '/ws') return socket.destroy();
-  if (!auth.networkAllowed(req) || !auth.isAuthed(req) || !auth.sameOrigin(req, true)) {
+  const sess = auth.networkAllowed(req) && auth.sameOrigin(req, true) ? auth.wsSession(req) : null;
+  if (!sess) {
     socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
     return socket.destroy();
   }
-  wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    ws.sess = sess;            // 로그인 세션 (버전·최초 로그인 시각) — 주기적으로 다시 확인
+    ws.lastActive = Date.now(); // 사용자가 마지막으로 조작한 시각 (입력 / 클라이언트 활동 신호)
+    wss.emit('connection', ws, req);
+  });
 });
 
 const clamp = (v, lo, hi, d) => (Number.isInteger(v) ? Math.min(hi, Math.max(lo, v)) : d);
@@ -292,7 +326,11 @@ wss.on('connection', (ws, req) => {
     try { m = JSON.parse(raw); } catch { return; }
     switch (m.t) {
       case 'i':
+        ws.lastActive = Date.now();
         if (stream && typeof m.d === 'string') stream.write(m.d);
+        break;
+      case 'active': // 브라우저에서 사용자가 조작 중 (스크롤·탭 등 입력이 아닌 활동)
+        ws.lastActive = Date.now();
         break;
       case 'resize':
         cols = clamp(m.cols, 10, 500, cols);
@@ -329,6 +367,19 @@ setInterval(() => {
     ws.ping();
   }
 }, 30000).unref();
+
+// 로그인 세션이 끝난 터미널 닫기: 전체 로그아웃·보안 설정 변경(즉시) / 최대 기간·유휴 초과(주기적)
+function closeExpiredTerminals() {
+  const now = Date.now();
+  for (const ws of wss.clients) {
+    const why = auth.wsSessionProblem(ws, now);
+    if (!why) continue;
+    if (ws.readyState === 1) ws.send(JSON.stringify({ t: 'error', msg: why }));
+    ws.close(4001, 'session');
+  }
+}
+auth.events.on('invalidate', closeExpiredTerminals);
+setInterval(closeExpiredTerminals, Math.max(1000, Math.min(30000, auth.IDLE_MS / 3))).unref();
 
 server.listen(config.PORT, config.BIND, () => {
   console.log(`[web-ssh] http://${config.BIND}:${config.PORT} 에서 실행 중 (data: ${config.DATA_DIR})`);

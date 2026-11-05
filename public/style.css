@@ -258,3 +258,6 @@ h4 { margin: 0 0 8px; font-size: 15px; display: flex; align-items: center; gap: 
   background: #0d1117; color: #e6edf3; border-color: #30363d; white-space: pre; overflow: auto;
   -webkit-user-select: text; user-select: text;
 }
+
+.switch-row { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; margin-bottom: 6px; cursor: pointer; }
+.switch-row input { width: auto; margin-top: 3px; }

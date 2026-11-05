@@ -459,6 +459,20 @@ async function renderPush() {
       } }, '삭제')));
   }
 
+  // 설치된 알림 토큰 (PC 별)
+  const tl = $('#push-tokens');
+  tl.textContent = '';
+  $('#push-tokens-title').hidden = !(info.tokens && info.tokens.length);
+  for (const tk of info.tokens || []) {
+    tl.append(h('li', {},
+      h('span', {}, tk.label, ' ', h('small', {}, `· 최근 사용 ${tk.lastUsed ? new Date(tk.lastUsed).toLocaleString() : '없음'}`)),
+      h('button', { type: 'button', class: 'ghost small danger', onclick: async () => {
+        if (!confirm(`"${tk.label}" 토큰을 삭제할까요? 그 PC 의 Claude 알림이 멈춥니다.`)) return;
+        await secCall(`api/push/tokens/${tk.id}`, undefined, 'DELETE');
+        renderPush();
+      } }, '삭제')));
+  }
+
   const sel = $('#push-host');
   const prev = sel.value;
   sel.replaceChildren(h('option', { value: '' }, '알림 클릭 시 열 호스트 (선택)'), ...hosts.map((x) => h('option', { value: x.id }, x.name)));
@@ -505,7 +519,7 @@ $('#btn-push-setup').addEventListener('click', async () => {
   const r = await secCall('api/push/setup', { hostId: $('#push-host').value });
   if (!r) return;
   const url = new URL(`api/notify/setup/${r.code}`, location.href).href;
-  $('#push-setup-cmd').textContent = `curl -fsS '${url}' | sh`;
+  $('#push-setup-cmd').textContent = `curl -fsS -X POST '${url}' | sh`;
   $('#push-setup-box').hidden = false;
   const until = Date.now() + r.expiresMin * 60e3;
   clearInterval(setupTimer);
@@ -519,7 +533,13 @@ $('#btn-push-setup').addEventListener('click', async () => {
 });
 $('#btn-push-copy').addEventListener('click', () => copyText($('#push-setup-cmd').textContent));
 
+$('#osc52-toggle').addEventListener('change', (e) => {
+  store.set('osc52', e.target.checked);
+  toast(e.target.checked ? '터미널 앱의 클립보드 복사를 허용합니다 (이 브라우저).' : '터미널 앱의 클립보드 복사를 막습니다.', 2500);
+});
+
 async function openSecurity() {
+  $('#osc52-toggle').checked = osc52Allowed();
   $('#sec-err').textContent = '';
   $('#sec-totp-setup').hidden = true;
   let s;
@@ -628,6 +648,11 @@ let ws = null;
 let curHostId = null;
 const mods = { ctrl: 0, alt: 0 }; // 0=off 1=한 번 2=고정
 
+// 터미널 앱의 클립보드 쓰기(OSC 52) 허용 여부 — 브라우저별 설정, 기본 꺼짐
+const OSC52_MAX_B64 = 140 * 1024; // base64 기준 ≈ 100KB
+let osc52Warned = false;
+const osc52Allowed = () => store.get('osc52', false) === true;
+
 function fontSize() { return store.get('fontSize', isTouch ? 13 : 15); }
 
 function ensureTerm() {
@@ -647,13 +672,20 @@ function ensureTerm() {
   term.onResize(({ cols, rows }) => wsSend({ t: 'resize', cols, rows }));
   // OSC 52: 터미널 안의 앱(Claude Code, tmux, vim 등)이 보낸 "클립보드에 복사" 요청 처리.
   // 클립보드 읽기 요청("?")은 보안상 무시한다.
+  // 쓰기도 원격 서버 출력만으로 클립보드를 바꿀 수 있어(악성 파일 cat → 붙여 넣으면 명령 실행) 기본은 꺼 두고
+  // ⚙ 설정에서 켠 경우에만, 크기 제한을 두고, 복사된 내용 앞부분을 토스트로 보여 준다.
   term.parser.registerOscHandler(52, (data) => {
     const i = data.indexOf(';');
     const b64 = i < 0 ? '' : data.slice(i + 1);
     if (!b64 || b64 === '?') return true;
+    if (!osc52Allowed()) {
+      if (!osc52Warned) { osc52Warned = true; toast('터미널 앱이 클립보드 복사를 요청했지만 꺼져 있습니다. ⚙ 설정 → 클립보드에서 켤 수 있습니다.', 5000); }
+      return true;
+    }
+    if (b64.length > OSC52_MAX_B64) { toast('복사 요청이 너무 커서 무시했습니다 (최대 약 100KB).', 4000); return true; }
     try {
       const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
-      copyText(new TextDecoder().decode(bytes));
+      copyText(new TextDecoder().decode(bytes), { preview: true });
     } catch { /* 잘못된 base64 무시 */ }
     return true;
   });
@@ -741,7 +773,7 @@ if (window.visualViewport) {
 }
 
 // 클립보드에 복사. 성공 여부를 알려준다 (http 주소에서는 브라우저가 자동 복사를 막을 수 있음)
-async function copyText(text, { quiet = false } = {}) {
+async function copyText(text, { quiet = false, preview = false } = {}) {
   if (!text) return false;
   let ok = false;
   if (navigator.clipboard && window.isSecureContext) {
@@ -756,7 +788,11 @@ async function copyText(text, { quiet = false } = {}) {
     ta.remove();
     if (term && !$('#view-term').hidden && !$('#dlg-copy').open) focusInput();
   }
-  if (ok) toast(`복사됨 (${text.length.toLocaleString()}자)`, 1500);
+  if (ok) {
+    // 앱이 요청한 복사는 무엇이 들어갔는지 보여 준다 (모르게 바뀐 클립보드를 붙여 넣는 사고 방지)
+    const head = text.replace(/\s+/g, ' ').trim().slice(0, 40);
+    toast(preview ? `클립보드에 복사됨: "${head}${text.length > 40 ? '…' : ''}" (${text.length.toLocaleString()}자)` : `복사됨 (${text.length.toLocaleString()}자)`, preview ? 4000 : 1500);
+  }
   else if (!quiet) toast('브라우저가 자동 복사를 막았습니다. 📋 복사 모드에서 직접 복사하세요.', 4000);
   return ok;
 }
@@ -1020,6 +1056,8 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) { ma
 async function keepAlive() {
   if (!$('#view-login').hidden || lastActivity <= lastPing) return;
   lastPing = Date.now();
+  // 열린 터미널에도 "사용 중" 신호 (서버는 조작이 없으면 유휴 시간 뒤 터미널을 닫는다)
+  wsSend({ t: 'active' });
   try {
     const r = await api('GET', 'api/me');
     if (!r.authed) { disconnect(); showView('login'); toast('오래 사용하지 않아 로그아웃되었습니다.', 4000); }

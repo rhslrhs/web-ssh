@@ -183,7 +183,7 @@
       <ul class="dev-list" id="push-subs"></ul>
       <details class="hook">
         <summary>Claude Code 연동</summary>
-        <p class="muted">설치 명령을 만들어 Claude 가 실행되는 곳(WSL · Linux · macOS 터미널)에 붙여 넣으면 끝입니다. 토큰 재발급도 같은 방법으로 합니다.</p>
+        <p class="muted">설치 명령을 만들어 Claude 가 실행되는 곳(WSL · Linux · macOS 터미널)에 붙여 넣으면 끝입니다. 여러 PC 에 설치할 수 있고, 같은 PC 에 다시 설치하면 그 PC 의 이전 토큰만 바뀝니다.</p>
         <div class="row tight wrap">
           <select id="push-host"></select>
           <button type="button" class="primary" id="btn-push-setup">설치 명령 만들기</button>
@@ -195,7 +195,17 @@
             <small class="muted" id="push-setup-exp"></small>
           </div>
         </div>
+        <p class="muted" id="push-tokens-title" hidden>설치된 알림 토큰 (안 쓰는 PC 는 삭제)</p>
+        <ul class="dev-list" id="push-tokens"></ul>
       </details>
+    </section>
+    <section class="sec-block">
+      <h4>클립보드</h4>
+      <label class="switch-row">
+        <input type="checkbox" id="osc52-toggle">
+        <span>터미널 앱의 복사 요청 허용 <small class="muted">(Claude Code 드래그 복사, tmux·vim 복사 등)</small></span>
+      </label>
+      <p class="muted">켜면 접속한 서버가 보낸 신호로 이 기기 클립보드가 바뀔 수 있습니다. 믿을 수 있는 서버에서만 켜세요. 복사될 때마다 내용 앞부분을 보여 줍니다. (이 브라우저에만 적용)</p>
     </section>
     <section class="sec-block">
       <h4>세션</h4>
