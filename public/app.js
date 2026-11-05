@@ -43,6 +43,8 @@ async function api(method, url, body) {
 
 function showView(name) {
   for (const v of ['login', 'list', 'term', 'wake']) $('#view-' + v).hidden = v !== name;
+  // 터미널 화면에서만 당겨서 새로고침 막기 (CSS .in-term)
+  document.documentElement.classList.toggle('in-term', name === 'term');
   if (name === 'login') { disconnect(); setTimeout(() => $('#login-pw').focus(), 0); }
 }
 
@@ -685,7 +687,11 @@ function setupTouchScroll(el) {
     acc -= n * lh;
     scrollTerm(n);
   }, { passive: false });
-  el.addEventListener('touchend', () => { lastY = null; }, { passive: true });
+  el.addEventListener('touchend', () => {
+    // 스크롤이 아닌 탭: 입력창을 쓰는 중이면 입력창에 포커스 (한글은 입력창이 안전)
+    if (lastY != null && !scrolling && !$('#line-input').hidden) setTimeout(() => $('#line-text').focus(), 0);
+    lastY = null;
+  }, { passive: true });
   el.addEventListener('touchcancel', () => { lastY = null; }, { passive: true });
 }
 
@@ -732,8 +738,11 @@ function copyText(text) {
   ta.select();
   try { document.execCommand('copy'); done(); } catch { /* ignore */ }
   ta.remove();
-  if (term && !$('#view-term').hidden) term.focus();
+  if (term && !$('#view-term').hidden) focusInput();
 }
+
+// 입력창을 쓰는 중이면 입력창, 아니면 터미널에 포커스
+function focusInput() { if (!$('#line-input').hidden) $('#line-text').focus(); else if (term) term.focus(); }
 
 function wsSend(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 function sendInput(d) { if (d) wsSend({ t: 'i', d }); }
@@ -763,7 +772,7 @@ async function openTerm(id) {
   showView('term');
   ensureTerm();
   layoutViewport();
-  if (curHostId === id && ws && ws.readyState <= 1) { term.focus(); return; }
+  if (curHostId === id && ws && ws.readyState <= 1) { focusInput(); return; }
   if (!hosts.length) { try { hosts = await api('GET', 'api/hosts'); } catch { return; } }
   const host = hosts.find((x) => x.id === id);
   disconnect();
@@ -797,7 +806,7 @@ function connect() {
         if (sock === ws && !gotEnd && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: 'answer', id: m.id, value }));
         break;
       }
-      case 'ready': setStatus('연결됨', 'ok'); scheduleFit(); term.focus(); break;
+      case 'ready': setStatus('연결됨', 'ok'); scheduleFit(); focusInput(); break;
       case 'error': gotEnd = true; dismissAsk(); setStatus('오류', 'err'); showOverlay(m.msg); break;
       case 'closed': gotEnd = true; dismissAsk(); setStatus('종료됨', 'err'); showOverlay('연결이 종료되었습니다.'); break;
     }
@@ -829,6 +838,7 @@ for (const b of document.querySelectorAll('.term-bar [data-act]')) {
     } else if (act === 'input') {
       const li = $('#line-input');
       li.hidden = !li.hidden;
+      store.set('lineInput', !li.hidden);
       b.classList.toggle('on', !li.hidden);
       if (!li.hidden) $('#line-text').focus(); else term.focus();
       scheduleFit();
@@ -848,6 +858,10 @@ $('#line-input').addEventListener('submit', (e) => {
   sendInput($('#line-text').value + '\r');
   $('#line-text').value = '';
 });
+// 입력창이 비어 있을 때 ⌫ 는 터미널에서 한 글자 지우기 (입력창에 쓰던 글자는 그대로 편집)
+$('#line-text').addEventListener('keydown', (e) => {
+  if (e.key === 'Backspace' && !e.target.value && !e.isComposing) { e.preventDefault(); sendInput('\x7f'); }
+});
 $('#line-noenter').addEventListener('click', () => {
   sendInput($('#line-text').value);
   $('#line-text').value = '';
@@ -857,7 +871,7 @@ $('#line-noenter').addEventListener('click', () => {
 // ── 특수키 바 ──
 const arrow = (c) => () => (term.modes.applicationCursorKeysMode ? '\x1bO' : '\x1b[') + c;
 const KEYS = [
-  { l: 'Esc', s: '\x1b' }, { l: 'Tab', s: '\t' }, { l: 'Ctrl', mod: 'ctrl' }, { l: 'Alt', mod: 'alt' },
+  { l: 'Esc', s: '\x1b' }, { l: 'Tab', s: '\t' }, { l: 'Ctrl', mod: 'ctrl' }, { l: 'Alt', mod: 'alt' }, { l: '↵', enter: 1, title: 'Enter' },
   { sep: 1 },
   { l: '←', f: arrow('D'), rep: 1 }, { l: '↓', f: arrow('B'), rep: 1 }, { l: '↑', f: arrow('A'), rep: 1 }, { l: '→', f: arrow('C'), rep: 1 },
   { sep: 1 },
@@ -891,6 +905,12 @@ function buildKeybar() {
     const stop = () => { clearTimeout(timer); clearInterval(timer); timer = null; };
     const fire = () => {
       if (k.mod) { mods[k.mod] = (mods[k.mod] + 1) % 3; renderMods(); return; }
+      if (k.enter) {
+        // 입력창에 쓰던 글자가 있으면 함께 보내고, 없으면 Enter 만
+        const t = $('#line-text');
+        if (!$('#line-input').hidden && t.value) { sendInput(t.value + '\r'); t.value = ''; } else sendInput('\r');
+        return;
+      }
       const seq = k.f ? k.f() : k.s != null ? k.s : k.l;
       // 일반 문자는 Ctrl/Alt 수식을 적용, 제어 시퀀스는 그대로
       sendInput(k.s == null && !k.f ? applyMods(seq) : seq);
@@ -919,6 +939,9 @@ function buildKeybar() {
   $('.term-bar [data-act=keys]').classList.toggle('on', !bar.hidden);
 }
 buildKeybar();
+// 모바일은 한글 조합이 깨지지 않는 입력창을 기본으로 (⌨ 버튼으로 끄면 기억)
+$('#line-input').hidden = !store.get('lineInput', isTouch);
+$('.term-bar [data-act=input]').classList.toggle('on', !$('#line-input').hidden);
 
 // ── 라우팅 ──
 function route() {
