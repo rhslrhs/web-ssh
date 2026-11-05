@@ -527,7 +527,7 @@ const KEYS = [
   { sep: 1 },
   { l: '←', f: arrow('D'), rep: 1 }, { l: '↓', f: arrow('B'), rep: 1 }, { l: '↑', f: arrow('A'), rep: 1 }, { l: '→', f: arrow('C'), rep: 1 },
   { sep: 1 },
-  { l: '^C', s: '\x03' }, { l: '^D', s: '\x04' }, { l: '^Z', s: '\x1a' }, { l: '^R', s: '\x12' }, { l: '^L', s: '\x0c' },
+  { l: '^B', s: '\x02', title: 'tmux 접두키 (Ctrl+B)' }, { l: '^C', s: '\x03' }, { l: '^D', s: '\x04' }, { l: '^Z', s: '\x1a' }, { l: '^R', s: '\x12' }, { l: '^L', s: '\x0c' },
   { sep: 1 },
   { l: '|' }, { l: '/' }, { l: '-' }, { l: '~' }, { l: ':' }, { l: '$' }, { l: '&' }, { l: '*' }, { l: '>' },
   { sep: 1 },
@@ -549,7 +549,7 @@ function buildKeybar() {
   const bar = $('#keybar');
   for (const k of KEYS) {
     if (k.sep) { bar.append(h('span', { class: 'sep' })); continue; }
-    const b = h('button', { type: 'button', tabindex: '-1' }, k.l);
+    const b = h('button', { type: 'button', tabindex: '-1', title: k.title }, k.l);
     if (k.mod) modBtns[k.mod] = b;
     let timer = null;
     let moved = false;
