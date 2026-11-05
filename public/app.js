@@ -834,7 +834,6 @@ function buildKeybar() {
     const b = h('button', { type: 'button', tabindex: '-1', title: k.title }, k.l);
     if (k.mod) modBtns[k.mod] = b;
     let timer = null;
-    let moved = false;
     let repeated = false;
     let startX = 0;
     const stop = () => { clearTimeout(timer); clearInterval(timer); timer = null; };
@@ -844,19 +843,22 @@ function buildKeybar() {
       // 일반 문자는 Ctrl/Alt 수식을 적용, 제어 시퀀스는 그대로
       sendInput(k.s == null && !k.f ? applyMods(seq) : seq);
     };
-    // pointerdown + preventDefault: 터미널 포커스(모바일 키보드)를 유지
+    // pointerdown + preventDefault: 터미널 포커스(모바일 키보드)를 유지 (click 이벤트는 그대로 발생)
     b.addEventListener('pointerdown', (e) => {
       e.preventDefault();
-      moved = false;
       repeated = false;
       startX = e.clientX;
       if (k.rep) timer = setTimeout(() => { repeated = true; fire(); timer = setInterval(fire, 60); }, 400);
     });
-    b.addEventListener('pointermove', (e) => { if (Math.abs(e.clientX - startX) > 10) { moved = true; stop(); } });
-    b.addEventListener('pointerup', () => {
-      if (!moved && !repeated) fire();
-      stop();
+    // 입력은 click 에서: 브라우저가 "탭"으로 판정한 경우에만 발생한다.
+    // (pointerup 으로 보내면 손가락이 살짝만 움직여도 키 바 가로 스크롤이 pointercancel 을 일으켜 입력이 씹힘)
+    b.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (repeated) { repeated = false; return; } // 길게 눌러 반복 입력한 경우는 이미 보냄
+      fire();
     });
+    b.addEventListener('pointermove', (e) => { if (Math.abs(e.clientX - startX) > 10) stop(); });
+    b.addEventListener('pointerup', stop);
     b.addEventListener('pointercancel', stop);
     b.addEventListener('pointerleave', stop);
     bar.append(b);
