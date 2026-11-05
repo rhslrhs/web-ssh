@@ -650,6 +650,58 @@ function ensureTerm() {
     return true;
   });
   new ResizeObserver(scheduleFit).observe($('#term-wrap'));
+  setupTouchScroll($('#term'));
+}
+
+// ── 모바일 터치 스크롤 ──
+// 일반 셸: 터미널 스크롤 기록을 움직인다.
+// 전체 화면 프로그램(tmux·vim·less 등): 마우스 모드면 휠 신호(SGR), 아니면 ↑↓ 키를 보낸다.
+//   tmux 는 `set -g mouse on` 이어야 휠로 기록을 스크롤한다.
+function setupTouchScroll(el) {
+  let lastY = null;
+  let acc = 0;
+  let scrolling = false;
+  const lineHeight = () => {
+    const cell = term._core && term._core._renderService && term._core._renderService.dimensions;
+    return (cell && cell.css && cell.css.cell && cell.css.cell.height) || term.options.fontSize * 1.2;
+  };
+  el.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) { lastY = null; return; }
+    lastY = e.touches[0].clientY;
+    acc = 0;
+    scrolling = false;
+  }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    if (lastY == null || e.touches.length !== 1) return;
+    const y = e.touches[0].clientY;
+    acc += lastY - y; // 손가락을 위로 → 양수 → 아래 내용(최신 쪽)으로
+    lastY = y;
+    const lh = lineHeight();
+    if (!scrolling && Math.abs(acc) < lh * 0.6) return; // 탭(키보드 열기)과 구분
+    scrolling = true;
+    e.preventDefault();
+    const n = Math.trunc(acc / lh);
+    if (!n) return;
+    acc -= n * lh;
+    scrollTerm(n);
+  }, { passive: false });
+  el.addEventListener('touchend', () => { lastY = null; }, { passive: true });
+  el.addEventListener('touchcancel', () => { lastY = null; }, { passive: true });
+}
+
+function scrollTerm(n) {
+  if (term.buffer.active.type === 'normal') { term.scrollLines(n); return; }
+  const count = Math.min(Math.abs(n), 15);
+  let seq;
+  if (term.modes.mouseTrackingMode !== 'none') {
+    const col = Math.max(1, Math.floor(term.cols / 2));
+    const row = Math.max(1, Math.floor(term.rows / 2));
+    seq = `\x1b[<${n < 0 ? 64 : 65};${col};${row}M`; // SGR 휠 위(64)/아래(65)
+  } else {
+    const app = term.modes.applicationCursorKeysMode;
+    seq = n < 0 ? (app ? '\x1bOA' : '\x1b[A') : (app ? '\x1bOB' : '\x1b[B');
+  }
+  sendInput(seq.repeat(count));
 }
 
 let fitTimer;
