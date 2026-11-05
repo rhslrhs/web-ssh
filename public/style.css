@@ -40,7 +40,7 @@ body {
 }
 [hidden] { display: none !important; }
 h1 { font-size: 18px; margin: 0; }
-h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 20px 4px 8px; text-transform: uppercase; letter-spacing: .04em; }
+h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin: 20px 4px 8px; letter-spacing: .02em; }
 h3 { margin: 0 0 14px; font-size: 17px; }
 .logo { font-family: ui-monospace, Consolas, monospace; color: var(--accent); }
 .spacer { flex: 1; }
@@ -73,6 +73,15 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 24px; }
 .login { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 12px; }
 .login h1 { text-align: center; margin-bottom: 6px; }
+.login-step { display: flex; flex-direction: column; gap: 10px; }
+.login-hint { margin: 0; font-size: 14px; color: var(--muted); text-align: center; }
+.otp-input { text-align: center; font-size: 26px; letter-spacing: .45em; padding-left: calc(11px + .45em); font-family: ui-monospace, Consolas, monospace; }
+.linklike { border: 0; background: none; color: var(--accent); padding: 2px; font-size: 13px; align-self: center; }
+.linklike:hover { text-decoration: underline; filter: none; }
+.steps-dots { display: flex; justify-content: center; gap: 6px; margin: 0; }
+.steps-dots span { width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
+.steps-dots span.on { background: var(--accent); width: 18px; border-radius: 4px; }
+.steps-dots span.done { background: var(--accent); opacity: .5; }
 
 .topbar {
   display: flex; align-items: center; gap: 8px;
@@ -83,7 +92,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 
 /* ── 호스트 목록 ── */
 .list { max-width: 900px; margin: 0 auto; padding: 4px 16px 40px; }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 10px; }
 .host {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
   display: flex; align-items: stretch; overflow: hidden;
@@ -93,7 +102,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .host-info { min-width: 0; }
 .host-name { font-weight: 600; }
 .host-sub { color: var(--muted); font-size: 13px; font-family: ui-monospace, Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 99px; background: var(--surface-2); color: var(--muted); margin-top: 4px; border: 1px solid var(--border); }
+.badge { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--surface-2); color: var(--muted); margin: 4px 4px 0 0; border: 1px solid var(--border); }
+.badge.cmd { font-family: ui-monospace, Consolas, monospace; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--border); margin-top: 7px; flex: none; }
 .dot.on { background: var(--ok); }
 .dot.off { background: var(--danger); }
@@ -112,7 +122,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .term-title { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; margin-left: 4px; }
 .term-title b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .term-title small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.term-bar .icon.on { background: var(--surface-2); border-color: var(--accent); }
+.term-bar { background: #161b22; border-bottom-color: #30363d; color: #e6edf3; }
+.term-bar button, .term-bar .btn { background: transparent; border-color: #30363d; color: #e6edf3; }
+.term-bar button:hover, .term-bar .btn:hover { background: #21262d; filter: none; }
+.term-bar .icon.on { background: #21262d; border-color: #4c8dff; }
+.term-title small { color: #8b949e; }
+.term-title small.ok { color: #3fb950; }
+.term-title small.err { color: #f85149; }
+.term-title small.busy { color: #d29922; }
 #term-wrap { flex: 1; min-height: 0; position: relative; padding: 4px 0 0 6px; }
 #term { width: 100%; height: 100%; }
 #term-overlay {
@@ -120,7 +137,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 16px;
   color: #e6edf3; text-align: center;
 }
-#term-overlay p { white-space: pre-wrap; max-width: 560px; margin: 0; }
+#term-overlay p { white-space: pre-wrap; max-width: 560px; margin: 0; line-height: 1.6; }
+#term-overlay .ghost { color: #e6edf3; border-color: #6e7681; background: transparent; }
+#term-overlay .ghost:hover { background: #21262d; filter: none; }
+/* xterm 스크롤바 어둡게 */
+.xterm .xterm-viewport { scrollbar-color: #30363d transparent; scrollbar-width: thin; }
+.xterm .xterm-viewport::-webkit-scrollbar { width: 8px; }
+.xterm .xterm-viewport::-webkit-scrollbar-thumb { background: #30363d; border-radius: 4px; }
+.xterm .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
 .center-row { justify-content: center; }
 
 #line-input { display: flex; gap: 6px; padding: 6px 8px; background: var(--key-bg); border-top: 1px solid #30363d; }
@@ -174,6 +198,18 @@ h4 { margin: 0 0 8px; font-size: 15px; display: flex; align-items: center; gap: 
 #sec-qr { display: block; margin-top: 8px; background: #fff; border-radius: 8px; padding: 6px; }
 .row.tight { margin-top: 8px; }
 .row.tight input { max-width: 160px; letter-spacing: .2em; }
+
+/* 좁은 화면: 상단바 버튼 압축 */
+@media (max-width: 480px) {
+  .topbar { padding-left: 12px; padding-right: 12px; gap: 6px; }
+  .topbar h1 { font-size: 16px; }
+  .topbar > button { padding: 7px 11px; }
+  .term-bar { padding-left: 6px; padding-right: 6px; }
+  .term-bar .icon { min-width: 34px; padding: 6px 8px; }
+}
+
+/* 터미널 화면에서는 특수키 바 위로 */
+#view-term:not([hidden]) ~ #toast { bottom: calc(120px + env(safe-area-inset-bottom)); }
 
 #toast {
   position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%);

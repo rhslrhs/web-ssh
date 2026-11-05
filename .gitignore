@@ -1,3 +1,6 @@
 node_modules/
 data/
+# .env 와 그 백업(.env.bak.*) 등 비밀값 파일 — 예시 파일만 허용
 .env
+.env.*
+!.env.example

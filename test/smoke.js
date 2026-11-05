@@ -23,6 +23,13 @@ function startSshd() {
   const hostKey = utils.generateKeyPairSync('ed25519').private;
   sshd = new Server({ hostKeys: [hostKey] }, (client) => {
     client.on('authentication', (ctx) => {
+      if (ctx.username === 'kbd') {
+        if (ctx.method !== 'keyboard-interactive') return ctx.reject(['keyboard-interactive']);
+        return ctx.prompt([{ prompt: 'Verification code: ', echo: false }], (a1) => {
+          if (a1[0] !== '123456') return ctx.reject();
+          ctx.prompt([{ prompt: 'Password: ', echo: false }], (a2) => (a2[0] === 'secret' ? ctx.accept() : ctx.reject()));
+        });
+      }
       if (ctx.method === 'password' && ctx.username === 'test' && ctx.password === 'secret') ctx.accept();
       else ctx.reject(['password']);
     });
@@ -47,8 +54,8 @@ function startSshd() {
   return new Promise((r) => sshd.listen(SSH_PORT, '127.0.0.1', r));
 }
 
-async function startWeb(env) {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wssh-'));
+const newDataDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'wssh-'));
+async function startWeb(env, dataDir = newDataDir()) {
   const p = spawn(process.execPath, [path.join(APP, 'server.js')], {
     env: { ...process.env, APP_PASSWORD: 'testpassword', PORT: WEB_PORT, BIND: '127.0.0.1', DATA_DIR: dataDir, SECRET_KEY: '', ...env },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -210,6 +217,84 @@ async function testExternal() {
   await stopWeb(web2);
 }
 
+// 프로세스가 바로 종료되는지 (시작 거부)
+function startExpectFail(env, dataDir) {
+  return new Promise((resolve) => {
+    const p = spawn(process.execPath, [path.join(APP, 'server.js')], {
+      env: { ...process.env, APP_PASSWORD: 'testpassword', PORT: WEB_PORT, BIND: '127.0.0.1', DATA_DIR: dataDir, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let err = '';
+    p.stderr.on('data', (d) => { err += d; });
+    const t = setTimeout(() => { p.kill(); resolve({ code: 'running', err }); }, 3000);
+    p.on('exit', (code) => { clearTimeout(t); resolve({ code, err }); });
+  });
+}
+
+// v1(AAD 없음) 형식으로 직접 암호화 — 기존 데이터 재현용
+function legacySeal(secretKey, text) {
+  const crypto = require('crypto');
+  const master = crypto.createHash('sha256').update(secretKey).digest();
+  const key = Buffer.from(crypto.hkdfSync('sha256', master, Buffer.alloc(0), 'web-ssh:enc', 32));
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const data = Buffer.concat([c.update(text, 'utf8'), c.final()]);
+  return { iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64'), data: data.toString('base64') };
+}
+
+async function testHardening() {
+  console.log('[키 관리 / 암호화 / 인증 강화]');
+  let r = await startExpectFail({ SECRET_KEY: 'short-key' }, newDataDir());
+  assert.strictEqual(r.code, 1); assert(/32자 이상/.test(r.err)); ok('짧은 SECRET_KEY → 시작 거부');
+  const bad = newDataDir();
+  fs.writeFileSync(path.join(bad, 'secret.key'), 'abc');
+  r = await startExpectFail({ SECRET_KEY: '' }, bad);
+  assert.strictEqual(r.code, 1); assert(/손상/.test(r.err)); ok('손상된 secret.key → 시작 거부');
+  fs.writeFileSync(path.join(bad, 'secret.key'), '');
+  r = await startExpectFail({ SECRET_KEY: '' }, bad);
+  assert.strictEqual(r.code, 1); ok('빈 secret.key → 시작 거부');
+
+  // 기존(v1) 데이터 자동 변환
+  const KEY = 'a'.repeat(64);
+  const dir = newDataDir();
+  const otp = totp.generateSecret();
+  fs.writeFileSync(path.join(dir, 'hosts.json'), JSON.stringify({ hosts: [
+    { id: 'legacy1', name: 'legacy', host: '127.0.0.1', port: SSH_PORT, username: 'test', authType: 'password',
+      jumpId: '', command: '', mac: '', wolBroadcast: '', group: '', hostKey: '', secret: legacySeal(KEY, JSON.stringify({ password: 'secret' })) },
+    { id: 'legacy2', name: 'other', host: '127.0.0.1', port: SSH_PORT, username: 'test', authType: 'password',
+      jumpId: '', command: '', mac: '', wolBroadcast: '', group: '', hostKey: '', secret: legacySeal(KEY, JSON.stringify({ password: 'zzz' })) },
+  ] }));
+  fs.writeFileSync(path.join(dir, 'auth.json'), JSON.stringify({ ver: 1, totp: legacySeal(KEY, otp), totpLast: 0 }));
+  let web = await startWeb({ SECRET_KEY: KEY }, dir);
+  const hosts = JSON.parse(fs.readFileSync(path.join(dir, 'hosts.json'), 'utf8'));
+  const authState = JSON.parse(fs.readFileSync(path.join(dir, 'auth.json'), 'utf8'));
+  assert(hosts.hosts.every((h) => h.secret.v === 2) && authState.totp.v === 2); ok('기존 hosts.json / auth.json → v2 자동 변환');
+  const cur = Math.floor(Date.now() / 30000);
+  const l = await login({ password: 'testpassword', code: totp.hotp(otp, cur) });
+  assert.strictEqual(l.status, 200); ok('변환된 OTP 비밀키로 로그인');
+  let s = await session(l.cookie, 'legacy1', { hostkey: true });
+  assert(s.out.includes('echo:hello')); ok('변환된 비밀번호로 SSH 접속');
+
+  // 키보드 인터랙티브: OTP 를 먼저 묻는 서버 → 비밀번호를 OTP 칸에 넣지 않음
+  const kbd = await (await post('/api/hosts', { name: 'kbd', host: '127.0.0.1', port: SSH_PORT, username: 'kbd', authType: 'password', password: 'secret' }, { Cookie: l.cookie })).json();
+  s = await session(l.cookie, kbd.id, { hostkey: true, prompt: ['123456'] });
+  assert.deepStrictEqual(s.asks, ['hostkey', 'prompt']); assert(s.out.includes('echo:hello'));
+  ok('OTP 프롬프트는 사용자에게 묻고, 이어지는 Password 프롬프트만 자동 입력');
+  await stopWeb(web);
+
+  // 암호문을 다른 호스트로 옮겨 붙이면 복호화 실패 (AAD)
+  const db = JSON.parse(fs.readFileSync(path.join(dir, 'hosts.json'), 'utf8'));
+  db.hosts.find((h) => h.id === 'legacy2').secret = db.hosts.find((h) => h.id === 'legacy1').secret;
+  fs.writeFileSync(path.join(dir, 'hosts.json'), JSON.stringify(db));
+  web = await startWeb({ SECRET_KEY: KEY }, dir);
+  const l2 = await login({ password: 'testpassword', code: totp.hotp(otp, cur + 1) });
+  s = await session(l2.cookie, 'legacy2', { hostkey: true });
+  assert(!s.out.includes('echo:hello') && /복호화할 수 없습니다/.test(s.error)); ok('다른 호스트로 옮긴 암호문 → 복호화 거부');
+  s = await session(l2.cookie, 'legacy1', {});
+  assert(s.out.includes('echo:hello')); ok('원래 호스트는 정상');
+  await stopWeb(web);
+}
+
 function testTotpUnit() {
   console.log('[TOTP]');
   // RFC 6238 테스트 벡터 (SHA1, 비밀키 "12345678901234567890")
@@ -226,6 +311,7 @@ function testTotpUnit() {
     await startSshd();
     await testCore();
     await testExternal();
+    await testHardening();
     console.log('ALL PASSED');
     process.exitCode = 0;
   } catch (e) {

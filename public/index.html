@@ -18,9 +18,16 @@
 <section id="view-login" class="view center" hidden>
   <form id="login-form" class="card login">
     <h1><span class="logo">&gt;_</span> Web SSH</h1>
-    <input type="password" id="login-pw" placeholder="앱 비밀번호" autocomplete="current-password" required autofocus>
-    <input type="text" id="login-code" placeholder="OTP 6자리" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\d{6}" hidden>
-    <button class="primary">로그인</button>
+    <div id="login-step1" class="login-step">
+      <input type="password" id="login-pw" placeholder="앱 비밀번호" autocomplete="current-password" autofocus>
+    </div>
+    <div id="login-step2" class="login-step" hidden>
+      <p class="login-hint">인증 앱의 6자리 코드를 입력하세요</p>
+      <input type="text" id="login-code" placeholder="000000" inputmode="numeric" autocomplete="one-time-code" maxlength="6" class="otp-input">
+      <button type="button" id="login-back" class="linklike">← 비밀번호 다시 입력</button>
+    </div>
+    <button class="primary" id="login-submit">로그인</button>
+    <p class="steps-dots" id="login-dots" hidden><span class="on"></span><span></span></p>
     <p class="err" id="login-err"></p>
   </form>
 </section>

@@ -47,23 +47,56 @@ function showView(name) {
 }
 
 // ── 로그인 ──
-function setNeedCode(on) {
-  $('#login-code').hidden = !on;
-  $('#login-code').required = !!on;
+// OTP 가 켜져 있으면 화면은 2단계(비밀번호 → 다음 → OTP)지만, 서버에는 마지막에 둘을 함께 보낸다.
+// 1단계에서 비밀번호만 따로 검증하면 "비밀번호가 맞다"는 정보가 새므로 의도적으로 하지 않는다.
+let needCode = false;
+let loginStep = 1;
+
+function setLoginStep(step) {
+  loginStep = needCode ? step : 1;
+  $('#login-step1').hidden = loginStep !== 1;
+  $('#login-step2').hidden = loginStep !== 2;
+  $('#login-submit').textContent = needCode && loginStep === 1 ? '다음' : '로그인';
+  $('#login-dots').hidden = !needCode;
+  const dots = $('#login-dots').children;
+  dots[0].className = loginStep === 1 ? 'on' : 'done';
+  dots[1].className = loginStep === 2 ? 'on' : '';
+  setTimeout(() => (loginStep === 1 ? $('#login-pw') : $('#login-code')).focus(), 0);
 }
-$('#login-form').addEventListener('submit', async (e) => {
-  e.preventDefault();
+function setNeedCode(on) {
+  needCode = !!on;
+  setLoginStep(1);
+}
+
+let loggingIn = false;
+async function submitLogin() {
+  const pw = $('#login-pw').value;
+  if (!pw) { $('#login-err').textContent = '비밀번호를 입력하세요.'; return $('#login-pw').focus(); }
+  if (needCode && loginStep === 1) { $('#login-err').textContent = ''; return setLoginStep(2); }
+  const code = $('#login-code').value.trim();
+  if (needCode && !/^\d{6}$/.test(code)) { $('#login-err').textContent = '6자리 숫자를 입력하세요.'; return $('#login-code').focus(); }
+  if (loggingIn) return;
+  loggingIn = true;
   $('#login-err').textContent = '';
   try {
-    await api('POST', 'api/login', { password: $('#login-pw').value, code: $('#login-code').value.trim() });
+    await api('POST', 'api/login', { password: pw, code });
     $('#login-pw').value = '';
     $('#login-code').value = '';
     route();
   } catch (err) {
     $('#login-err').textContent = err.message;
     $('#login-code').value = '';
-    if (err.data && err.data.needCode) setNeedCode(true);
-  }
+    // 어느 쪽이 틀렸는지 서버가 알려주지 않으므로 처음부터 다시 입력
+    if (err.data && err.data.needCode) { needCode = true; $('#login-pw').value = ''; }
+    setLoginStep(1);
+  } finally { loggingIn = false; }
+}
+$('#login-form').addEventListener('submit', (e) => { e.preventDefault(); submitLogin(); });
+$('#login-back').addEventListener('click', () => { $('#login-err').textContent = ''; setLoginStep(1); });
+// 6자리를 다 입력하면 자동 로그인 (붙여넣기 포함)
+$('#login-code').addEventListener('input', (e) => {
+  e.target.value = e.target.value.replace(/\D/g, '').slice(0, 6);
+  if (e.target.value.length === 6) submitLogin();
 });
 $('#btn-logout').addEventListener('click', async () => { await api('POST', 'api/logout').catch(() => {}); showView('login'); });
 
@@ -115,9 +148,9 @@ function hostCard(x) {
       h('span', { class: 'dot' }),
       h('div', { class: 'host-info' },
         h('div', { class: 'host-name' }, x.name),
-        h('div', { class: 'host-sub' }, `${x.username}@${x.host}${x.port !== 22 ? ':' + x.port : ''}`),
+        h('div', { class: 'host-sub', title: `${x.username}@${x.host}:${x.port}` }, `${x.username}@${x.host}${x.port !== 22 ? ':' + x.port : ''}`),
         jump ? h('span', { class: 'badge' }, '경유: ' + jump.name) : null,
-        x.command ? h('span', { class: 'badge', title: x.command }, '▶ ' + (x.command.length > 28 ? x.command.slice(0, 28) + '…' : x.command)) : null)),
+        x.command ? h('span', { class: 'badge cmd', title: x.command }, '▶ ' + x.command) : null)),
     h('div', { class: 'host-actions' },
       x.mac ? h('button', { title: 'Wake-on-LAN', onclick: () => wakeHost(x) }, '켜기') : null,
       h('button', { onclick: () => openEditor(x) }, '편집')));
@@ -388,7 +421,11 @@ function applyMods(d) {
   return d;
 }
 
-function setStatus(s) { $('#term-status').textContent = s; }
+function setStatus(s, kind = '') {
+  const el = $('#term-status');
+  el.textContent = s;
+  el.className = kind; // ok | err | busy
+}
 function showOverlay(msg) { $('#overlay-msg').textContent = msg; $('#term-overlay').hidden = false; }
 
 async function openTerm(id) {
@@ -408,7 +445,7 @@ async function openTerm(id) {
 function connect() {
   $('#term-overlay').hidden = true;
   term.reset();
-  setStatus('연결 중...');
+  setStatus('연결 중...', 'busy');
   const sock = new WebSocket(new URL('ws', location.href).href.replace(/^http/, 'ws'));
   sock.binaryType = 'arraybuffer';
   ws = sock;
@@ -422,20 +459,20 @@ function connect() {
     if (typeof ev.data !== 'string') { term.write(new Uint8Array(ev.data)); return; }
     const m = JSON.parse(ev.data);
     switch (m.t) {
-      case 'status': setStatus(m.msg); term.write(`\x1b[90m${m.msg}\x1b[0m\r\n`); break;
+      case 'status': setStatus(m.msg, 'busy'); term.write(`\x1b[38;5;245m${m.msg}\x1b[0m\r\n`); break;
       case 'ask': {
         const value = await askDialog(m);
         if (sock === ws) sock.send(JSON.stringify({ t: 'answer', id: m.id, value }));
         break;
       }
-      case 'ready': setStatus('연결됨'); scheduleFit(); term.focus(); break;
-      case 'error': gotEnd = true; setStatus('오류'); showOverlay(m.msg); break;
-      case 'closed': gotEnd = true; setStatus('종료됨'); showOverlay('연결이 종료되었습니다.'); break;
+      case 'ready': setStatus('연결됨', 'ok'); scheduleFit(); term.focus(); break;
+      case 'error': gotEnd = true; setStatus('오류', 'err'); showOverlay(m.msg); break;
+      case 'closed': gotEnd = true; setStatus('종료됨', 'err'); showOverlay('연결이 종료되었습니다.'); break;
     }
   };
   sock.onclose = () => {
     if (sock !== ws) return;
-    if (!gotEnd) { setStatus('끊김'); showOverlay('서버와의 연결이 끊어졌습니다.'); }
+    if (!gotEnd) { setStatus('끊김', 'err'); showOverlay('서버와의 연결이 끊어졌습니다.'); }
   };
 }
 
