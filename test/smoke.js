@@ -80,7 +80,7 @@ async function login(body, headers) {
   return { status: r.status, data, cookie };
 }
 
-function session(cookie, hostId, answers) {
+function session(cookie, hostId, answers, delayMs = 0) {
   return new Promise((resolve) => {
     const w = new WebSocket(`ws://127.0.0.1:${WEB_PORT}/ws`, { headers: { Cookie: cookie, Origin: base } });
     let out = '';
@@ -94,7 +94,10 @@ function session(cookie, hostId, answers) {
         return;
       }
       const m = JSON.parse(d);
-      if (m.t === 'ask') { asks.push(m.kind); w.send(JSON.stringify({ t: 'answer', id: m.id, value: answers[m.kind] })); }
+      if (m.t === 'ask') {
+        asks.push(m.kind);
+        setTimeout(() => w.readyState === 1 && w.send(JSON.stringify({ t: 'answer', id: m.id, value: answers[m.kind] })), delayMs);
+      }
       if (m.t === 'ready') { w.send(JSON.stringify({ t: 'resize', cols: 120, rows: 40 })); w.send(JSON.stringify({ t: 'i', d: 'hello' })); }
       if (m.t === 'error') error = m.msg;
     });
@@ -295,6 +298,37 @@ async function testHardening() {
   await stopWeb(web);
 }
 
+async function testReview2() {
+  console.log('[타임아웃 / 허용 목록 / CGNAT]');
+  // 접속 타이머(1.5초)보다 오래 지문 확인 창에 머물러도 끊기지 않아야 함
+  let web = await startWeb({ SSH_TIMEOUT_MS: '1500' });
+  const { cookie } = await login({ password: 'testpassword' });
+  const h = await (await post('/api/hosts', { name: 'slow', host: '127.0.0.1', port: SSH_PORT, username: 'test', authType: 'ask' }, { Cookie: cookie })).json();
+  const s = await session(cookie, h.id, { password: 'secret', hostkey: true }, 2500);
+  assert(s.out.includes('echo:hello'), JSON.stringify(s)); ok('사용자 입력 대기 중에는 접속 타이머 정지 (2.5초 대기 > 1.5초 제한)');
+  // 응답 없는 서버는 여전히 시간 초과
+  const black = net.createServer(() => {}).listen(23001, '127.0.0.1');
+  const h2 = await (await post('/api/hosts', { name: 'black', host: '127.0.0.1', port: 23001, username: 'test', authType: 'password', password: 'x' }, { Cookie: cookie })).json();
+  const t0 = Date.now();
+  const s2 = await session(cookie, h2.id, {});
+  black.close();
+  assert(/시간 초과/.test(s2.error) && Date.now() - t0 < 5000, JSON.stringify(s2)); ok('응답 없는 서버는 시간 초과');
+  await stopWeb(web);
+
+  for (const bad of ['1.2.3.4/40', '1.2.3.4/', '::1/64']) {
+    const r = await startExpectFail({ PUBLIC_ACCESS: '1', ALLOW_PUBLIC_IPS: bad }, newDataDir());
+    assert.strictEqual(r.code, 1, bad); assert(/형식 오류/.test(r.err));
+  }
+  ok('잘못된 ALLOW_PUBLIC_IPS (접두사 40, 빈 접두사, IPv6 대역) → 시작 거부');
+
+  web = await startWeb({ TRUST_PROXY: '1' });
+  assert.strictEqual((await fetch(base + '/', { headers: { 'X-Real-IP': '100.64.1.1' } })).status, 403); ok('CGNAT(100.64/10) 기본값: 외부로 취급');
+  await stopWeb(web);
+  web = await startWeb({ TRUST_PROXY: '1', TRUST_CGNAT: '1' });
+  assert.strictEqual((await fetch(base + '/', { headers: { 'X-Real-IP': '100.64.1.1' } })).status, 200); ok('TRUST_CGNAT=1: 내부망으로 취급 (Tailscale)');
+  await stopWeb(web);
+}
+
 function testTotpUnit() {
   console.log('[TOTP]');
   // RFC 6238 테스트 벡터 (SHA1, 비밀키 "12345678901234567890")
@@ -312,6 +346,7 @@ function testTotpUnit() {
     await testCore();
     await testExternal();
     await testHardening();
+    await testReview2();
     console.log('ALL PASSED');
     process.exitCode = 0;
   } catch (e) {

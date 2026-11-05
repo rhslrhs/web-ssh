@@ -235,7 +235,9 @@ $('#btn-del').addEventListener('click', async () => {
 
 $('#btn-reset-hk').addEventListener('click', async () => {
   if (!editing || !confirm('저장된 호스트 키를 지울까요? 다음 접속 때 새 키를 다시 확인합니다.')) return;
-  await api('POST', `api/hosts/${editing.id}/reset-hostkey`);
+  try {
+    await api('POST', `api/hosts/${editing.id}/reset-hostkey`);
+  } catch (err) { $('#host-err').textContent = err.message; return; }
   editing.hostKey = '';
   $('#hostkey-info').hidden = true;
   toast('호스트 키를 초기화했습니다');
@@ -336,6 +338,11 @@ function askDialog(m) {
     (first || $('#ask-ok')).focus();
   });
 }
+// 접속이 실패/종료되면 남아 있는 질문 창을 닫는다 (서버로는 보내지 않음)
+function dismissAsk() {
+  if (askResolve) askResolve(false);
+}
+
 $('#ask-form').addEventListener('submit', (e) => { e.preventDefault(); if (askResolve) askResolve(true); });
 $('#ask-cancel').addEventListener('click', () => askResolve && askResolve(false));
 dlgAsk.addEventListener('cancel', (e) => { e.preventDefault(); if (askResolve) askResolve(false); });
@@ -462,21 +469,24 @@ function connect() {
       case 'status': setStatus(m.msg, 'busy'); term.write(`\x1b[38;5;245m${m.msg}\x1b[0m\r\n`); break;
       case 'ask': {
         const value = await askDialog(m);
-        if (sock === ws) sock.send(JSON.stringify({ t: 'answer', id: m.id, value }));
+        // 기다리는 동안 접속이 끝났으면(오류/종료/화면 이탈) 보내지 않는다
+        if (sock === ws && !gotEnd && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: 'answer', id: m.id, value }));
         break;
       }
       case 'ready': setStatus('연결됨', 'ok'); scheduleFit(); term.focus(); break;
-      case 'error': gotEnd = true; setStatus('오류', 'err'); showOverlay(m.msg); break;
-      case 'closed': gotEnd = true; setStatus('종료됨', 'err'); showOverlay('연결이 종료되었습니다.'); break;
+      case 'error': gotEnd = true; dismissAsk(); setStatus('오류', 'err'); showOverlay(m.msg); break;
+      case 'closed': gotEnd = true; dismissAsk(); setStatus('종료됨', 'err'); showOverlay('연결이 종료되었습니다.'); break;
     }
   };
   sock.onclose = () => {
     if (sock !== ws) return;
+    dismissAsk();
     if (!gotEnd) { setStatus('끊김', 'err'); showOverlay('서버와의 연결이 끊어졌습니다.'); }
   };
 }
 
 function disconnect() {
+  dismissAsk();
   if (ws) { const s = ws; ws = null; s.onclose = null; s.close(); }
   curHostId = null;
 }
