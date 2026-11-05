@@ -10,6 +10,7 @@ const { connectChain, tcpCheck } = require('./lib/ssh');
 const wol = require('./lib/wol');
 const push = require('./lib/push');
 const notifyToken = require('./lib/notifytoken');
+const passkey = require('./lib/passkey');
 
 const app = express();
 app.disable('x-powered-by');
@@ -41,6 +42,76 @@ app.post('/api/login', auth.login);
 app.post('/api/logout', auth.logout);
 app.get('/api/me', auth.me);
 
+// ── 패스키 로그인 (인증 전) ──
+app.post('/api/passkey/login/options', async (req, res) => {
+  try { res.json(await passkey.loginOptions(req)); } catch (e) { res.status(e instanceof passkey.PasskeyError ? 400 : 500).json({ error: e.message }); }
+});
+app.post('/api/passkey/login/verify', auth.loginPasskey);
+
+// ── Claude Code 연동 설치: 화면에서 만든 1회용 코드(10분)로 설치 스크립트를 받는다 ──
+//   curl -fsS '<주소>/api/notify/setup/<코드>' | sh
+// 실행하면 새 알림 토큰 발급 + ~/.claude/web-ssh-notify.sh 생성 + settings.json 훅 등록 + 테스트 알림
+const setupCodes = new Map(); // code -> { until, hostId }
+const shq = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`; // sh 작은따옴표 인용
+app.get('/api/notify/setup/:code', (req, res) => {
+  const now = Date.now();
+  for (const [c, v] of setupCodes) if (v.until < now) setupCodes.delete(c);
+  const entry = setupCodes.get(req.params.code);
+  res.type('text/plain; charset=utf-8');
+  // curl -f 는 4xx 본문을 버리고 sh 는 빈 입력에 성공(0)하므로, 200 + 실패 스크립트로 안내한다
+  if (!entry) return res.send("echo '✗ 설치 코드가 만료되었거나 이미 사용되었습니다. web-ssh ⚙ 설정에서 새로 만드세요.' >&2; exit 1\n");
+  setupCodes.delete(req.params.code); // 1회용
+  const token = notifyToken.issue();
+  const base = `${req.protocol}://${req.headers.host}`;
+  const url = `${base}/api/notify${entry.hostId ? `?host=${encodeURIComponent(entry.hostId)}` : ''}`;
+  console.log(`[web-ssh] Claude 연동 설치 ${auth.clientIp(req)} (토큰 재발급)`);
+  res.send(`#!/bin/sh
+# web-ssh: Claude Code 알림 연동 설치
+set -e
+command -v curl >/dev/null 2>&1 || { echo 'curl 이 필요합니다' >&2; exit 1; }
+D="$HOME/.claude"; mkdir -p "$D"
+umask 077
+cat > "$D/web-ssh-notify.sh" <<'WSSH_EOF'
+#!/bin/sh
+# Claude Code 훅 → web-ssh 푸시 (재설치: web-ssh ⚙ 설정 → Claude Code 연동)
+curl -fsS -m 5 -X POST ${shq(url)} -H ${shq('Authorization: Bearer ' + token)} -H 'Content-Type: application/json' --data-binary @- >/dev/null 2>&1 || true
+WSSH_EOF
+chmod 700 "$D/web-ssh-notify.sh"
+S="$D/settings.json"
+[ -s "$S" ] && cp "$S" "$S.bak.web-ssh"
+if command -v python3 >/dev/null 2>&1; then
+python3 - "$S" <<'PY_EOF'
+import json, os, sys
+p = sys.argv[1]
+s = json.load(open(p)) if os.path.exists(p) and os.path.getsize(p) else {}
+cmd = 'sh ~/.claude/web-ssh-notify.sh'
+hooks = s.setdefault('hooks', {})
+for ev in ('Stop', 'Notification'):
+    arr = hooks.setdefault(ev, [])
+    if not any(h.get('command') == cmd for g in arr for h in g.get('hooks', [])):
+        arr.append({'hooks': [{'type': 'command', 'command': cmd, 'timeout': 10}]})
+json.dump(s, open(p, 'w'), indent=2, ensure_ascii=False)
+PY_EOF
+elif command -v node >/dev/null 2>&1; then
+node -e '
+const fs = require("fs"), p = process.argv[1];
+const s = fs.existsSync(p) && fs.statSync(p).size ? JSON.parse(fs.readFileSync(p, "utf8")) : {};
+const cmd = "sh ~/.claude/web-ssh-notify.sh"; s.hooks = s.hooks || {};
+for (const ev of ["Stop", "Notification"]) {
+  const arr = (s.hooks[ev] = s.hooks[ev] || []);
+  if (!arr.some((g) => (g.hooks || []).some((h) => h.command === cmd))) arr.push({ hooks: [{ type: "command", command: cmd, timeout: 10 }] });
+}
+fs.writeFileSync(p, JSON.stringify(s, null, 2));
+' "$S"
+else
+  echo 'python3 또는 node 가 없어 훅을 자동 등록하지 못했습니다. ~/.claude/settings.json 의 hooks 에 Stop/Notification → "sh ~/.claude/web-ssh-notify.sh" 를 추가하세요.' >&2
+fi
+echo '{"hook_event_name":"Notification","message":"Claude Code 알림 연동 완료"}' | sh "$D/web-ssh-notify.sh"
+echo '✓ web-ssh 알림 연동 완료 — 등록된 기기로 테스트 알림을 보냈습니다.'
+echo '  새로 시작하는 Claude 세션부터 적용됩니다 (실행 중인 세션은 /hooks 를 한 번 열면 적용).'
+`);
+});
+
 // ── 외부 스크립트(Claude Code 훅 등) → 푸시. 로그인 쿠키가 아닌 알림 전용 토큰으로 인증 ──
 let notifyHits = [];
 app.post('/api/notify', async (req, res) => {
@@ -69,16 +140,31 @@ api.post('/security/totp/enable', auth.requirePrivate, auth.totpEnable);
 api.post('/security/totp/disable', auth.requirePrivate, auth.totpDisable);
 api.post('/security/logout-all', auth.logoutAll);
 
+// ── 패스키 관리 (등록/삭제는 내부망/VPN 에서만) ──
+const pkWrap = (fn) => async (req, res) => {
+  try { res.json(await fn(req, res)); } catch (e) { res.status(e instanceof passkey.PasskeyError ? 400 : 500).json({ error: e.message }); }
+};
+api.get('/passkey', pkWrap(() => ({ creds: passkey.list(), origins: passkey.origins() })));
+api.post('/passkey/register/options', auth.requirePrivate, pkWrap((req) => passkey.registrationOptions(req)));
+api.post('/passkey/register/verify', auth.requirePrivate, pkWrap((req) => passkey.register(req, (req.body || {}).response, (req.body || {}).label)));
+api.delete('/passkey/:id', auth.requirePrivate, pkWrap((req) => ({ ok: passkey.remove(req.params.id) })));
+
 // ── 푸시 구독 관리 ──
 const pushWrap = (fn) => async (req, res) => {
   try { res.json(await fn(req, res)); } catch (e) { res.status(e instanceof push.PushError ? 400 : 500).json({ error: e.message }); }
 };
 api.get('/push', pushWrap(() => ({ publicKey: push.publicKey(), subs: push.list(), token: notifyToken.info() })));
-api.post('/push/subscribe', pushWrap((req) => push.subscribe((req.body || {}).subscription, (req.body || {}).label)));
+api.post('/push/subscribe', pushWrap((req) => push.subscribe((req.body || {}).subscription, (req.body || {}).label, (req.body || {}).replaceId)));
 api.delete('/push/subs/:id', pushWrap((req) => ({ ok: push.remove(req.params.id) })));
 api.post('/push/test', pushWrap(() => push.send({ title: 'Web SSH', body: '테스트 알림입니다 🔔', url: './', tag: 'test' })));
-// 토큰 발급은 내부망/VPN 에서만 (기존 토큰은 무효)
+// 토큰 발급 / 설치 코드는 내부망/VPN 에서만 (기존 토큰은 무효)
 api.post('/push/token', auth.requirePrivate, pushWrap(() => ({ token: notifyToken.issue() })));
+api.post('/push/setup', auth.requirePrivate, pushWrap((req) => {
+  const code = require('crypto').randomBytes(12).toString('base64url');
+  const hostId = String((req.body || {}).hostId || '');
+  setupCodes.set(code, { until: Date.now() + 10 * 60e3, hostId: store.get(hostId) ? hostId : '' });
+  return { code, expiresMin: 10 };
+}));
 
 api.get('/hosts', (req, res) => res.json(store.list()));
 api.post('/hosts', wrap((req, res) => res.json(store.create(req.body || {}))));

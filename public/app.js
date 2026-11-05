@@ -46,6 +46,89 @@ function showView(name) {
   if (name === 'login') { disconnect(); setTimeout(() => $('#login-pw').focus(), 0); }
 }
 
+// ── 패스키 (WebAuthn) ──
+const pkSupported = !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
+let pkInfo = { count: 0, origins: [] };
+const pkOriginOk = () => location.hostname === 'localhost' || pkInfo.origins.includes(location.origin);
+const toBuf = (s) => {
+  const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4));
+  return Uint8Array.from(b, (ch) => ch.charCodeAt(0)).buffer;
+};
+const fromBuf = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const pkErr = (e) => (e && e.name === 'NotAllowedError' ? '취소되었거나 시간이 지났습니다.' : e && e.name === 'InvalidStateError' ? '이 기기는 이미 등록되어 있습니다.' : (e && e.message) || String(e));
+
+async function passkeyLogin() {
+  $('#login-err').textContent = '';
+  try {
+    const o = await api('POST', 'api/passkey/login/options', {});
+    const cred = await navigator.credentials.get({ publicKey: {
+      ...o, challenge: toBuf(o.challenge), allowCredentials: (o.allowCredentials || []).map((x) => ({ ...x, id: toBuf(x.id) })),
+    } });
+    const r = cred.response;
+    await api('POST', 'api/passkey/login/verify', { response: {
+      id: cred.id, rawId: fromBuf(cred.rawId), type: cred.type, authenticatorAttachment: cred.authenticatorAttachment || undefined,
+      clientExtensionResults: cred.getClientExtensionResults(),
+      response: { clientDataJSON: fromBuf(r.clientDataJSON), authenticatorData: fromBuf(r.authenticatorData), signature: fromBuf(r.signature), userHandle: r.userHandle ? fromBuf(r.userHandle) : undefined },
+    } });
+    $('#login-pw').value = '';
+    route();
+  } catch (e) { $('#login-err').textContent = pkErr(e); }
+}
+$('#login-passkey').addEventListener('click', passkeyLogin);
+
+async function passkeyRegister() {
+  const btn = $('#btn-pk-add');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  $('#sec-err').textContent = '';
+  try {
+    const o = await api('POST', 'api/passkey/register/options', {});
+    const cred = await navigator.credentials.create({ publicKey: {
+      ...o, challenge: toBuf(o.challenge), user: { ...o.user, id: toBuf(o.user.id) },
+      excludeCredentials: (o.excludeCredentials || []).map((x) => ({ ...x, id: toBuf(x.id) })),
+    } });
+    const r = cred.response;
+    await api('POST', 'api/passkey/register/verify', { label: deviceLabel(), response: {
+      id: cred.id, rawId: fromBuf(cred.rawId), type: cred.type, authenticatorAttachment: cred.authenticatorAttachment || undefined,
+      clientExtensionResults: cred.getClientExtensionResults(),
+      response: { clientDataJSON: fromBuf(r.clientDataJSON), attestationObject: fromBuf(r.attestationObject), transports: r.getTransports ? r.getTransports() : [] },
+    } });
+    toast('패스키를 등록했습니다. 다음부터 지문으로 로그인할 수 있습니다.', 4000);
+  } catch (e) { $('#sec-err').textContent = pkErr(e); }
+  btn.disabled = false;
+  renderPasskeys();
+}
+$('#btn-pk-add').addEventListener('click', passkeyRegister);
+
+async function renderPasskeys(privateNet) {
+  let info;
+  try { info = await api('GET', 'api/passkey'); } catch (e) { $('#pk-help').textContent = e.message; return; }
+  pkInfo.origins = info.origins;
+  const help = $('#pk-help');
+  const where = info.origins[0] || 'HTTPS 도메인(PUBLIC_ORIGIN 설정)';
+  let can = false;
+  if (!pkSupported) help.textContent = window.isSecureContext ? '이 브라우저는 패스키를 지원하지 않습니다.' : `패스키는 HTTPS 주소(${where})로 접속해야 쓸 수 있습니다.`;
+  else if (!pkOriginOk()) help.textContent = `패스키는 ${where} 주소로 접속했을 때만 등록·사용할 수 있습니다.`;
+  else if (privateNet === false) help.textContent = '패스키 등록은 내부망/VPN 에서만 할 수 있습니다.';
+  else { help.textContent = '등록하면 비밀번호·OTP 대신 지문이나 얼굴 인식으로 로그인합니다.'; can = true; }
+  $('#btn-pk-add').hidden = !can;
+  const st = $('#pk-state');
+  st.textContent = info.creds.length ? `${info.creds.length}개 등록` : '없음';
+  st.classList.toggle('on', info.creds.length > 0);
+  const ul = $('#pk-list');
+  ul.textContent = '';
+  for (const c of info.creds) {
+    const used = c.lastUsed ? `최근 ${new Date(c.lastUsed).toLocaleDateString()}` : '사용 전';
+    ul.append(h('li', {},
+      h('span', {}, c.label, ' ', h('small', {}, `· ${new Date(c.created).toLocaleDateString()} 등록 · ${used}`)),
+      privateNet === false ? null : h('button', { type: 'button', class: 'ghost small danger', onclick: async () => {
+        if (!confirm(`"${c.label}" 패스키를 삭제할까요?\n(기기에 저장된 패스키는 기기 설정에서 따로 지워야 합니다)`)) return;
+        await secCall(`api/passkey/${encodeURIComponent(c.id)}`, undefined, 'DELETE');
+        renderPasskeys(privateNet);
+      } }, '삭제')));
+  }
+}
+
 // ── 로그인 ──
 // OTP 가 켜져 있으면 화면은 2단계(비밀번호 → 다음 → OTP)지만, 서버에는 마지막에 둘을 함께 보낸다.
 // 1단계에서 비밀번호만 따로 검증하면 "비밀번호가 맞다"는 정보가 새므로 의도적으로 하지 않는다.
@@ -315,10 +398,15 @@ async function renderPush() {
   const prev = sel.value;
   sel.replaceChildren(h('option', { value: '' }, '알림 클릭 시 열 호스트 (선택)'), ...hosts.map((x) => h('option', { value: x.id }, x.name)));
   sel.value = prev || (hosts.find((x) => /wsl|claude/i.test(x.command || '')) || {}).id || '';
-  $('#btn-push-token').textContent = info.token.exists ? '토큰 재발급' : '토큰 발급';
 }
 
+let pushBusy = false;
 $('#btn-push-on').addEventListener('click', async () => {
+  if (pushBusy) return;
+  pushBusy = true;
+  const btn = $('#btn-push-on');
+  btn.disabled = true;
+  btn.textContent = '등록 중…';
   $('#sec-err').textContent = '';
   try {
     if ((await Notification.requestPermission()) !== 'granted') throw new Error('알림 권한이 허용되지 않았습니다.');
@@ -326,10 +414,13 @@ $('#btn-push-on').addEventListener('click', async () => {
     const reg = swReg || await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
-    const r = await api('POST', 'api/push/subscribe', { subscription: sub.toJSON(), label: deviceLabel() });
+    const r = await api('POST', 'api/push/subscribe', { subscription: sub.toJSON(), label: deviceLabel(), replaceId: myPushId() });
     setMyPushId(r.id);
     toast('이 기기에서 알림을 받습니다.');
   } catch (e) { $('#sec-err').textContent = e.message; }
+  pushBusy = false;
+  btn.disabled = false;
+  btn.textContent = '이 기기에서 받기';
   renderPush();
 });
 $('#btn-push-off').addEventListener('click', async () => {
@@ -344,31 +435,24 @@ $('#btn-push-test').addEventListener('click', async () => {
   const r = await secCall('api/push/test');
   if (r) toast(`테스트 알림 전송: ${r.sent}대 성공${r.failed ? `, ${r.failed}대 실패` : ''}${r.removed ? `, 만료 ${r.removed}대 정리` : ''}`, 4000);
 });
-$('#btn-push-token').addEventListener('click', async () => {
-  if (!confirm('알림 토큰을 새로 발급할까요? 이전 토큰은 더 이상 동작하지 않습니다.')) return;
-  const r = await secCall('api/push/token');
+let setupTimer = null;
+$('#btn-push-setup').addEventListener('click', async () => {
+  const r = await secCall('api/push/setup', { hostId: $('#push-host').value });
   if (!r) return;
-  const hostQ = $('#push-host').value ? `?host=${encodeURIComponent($('#push-host').value)}` : '';
-  const url = new URL('api/notify', location.href).href + hostQ;
-  const cfg = `# 1) 알림 스크립트 (Claude 가 실행되는 곳, 예: WSL)
-mkdir -p ~/.claude && cat > ~/.claude/web-ssh-notify.sh <<'EOF'
-#!/bin/sh
-# Claude Code 훅 → web-ssh 푸시 (stdin 의 훅 JSON 을 그대로 전달)
-curl -fsS -m 5 -X POST '${url}' \\
-  -H 'Authorization: Bearer ${r.token}' \\
-  -H 'Content-Type: application/json' --data-binary @- >/dev/null 2>&1 || true
-EOF
-chmod 700 ~/.claude/web-ssh-notify.sh
-
-# 2) ~/.claude/settings.json 의 "hooks" 에 추가
-"Stop":         [{ "hooks": [{ "type": "command", "command": "sh ~/.claude/web-ssh-notify.sh" }] }],
-"Notification": [{ "hooks": [{ "type": "command", "command": "sh ~/.claude/web-ssh-notify.sh" }] }]`;
-  $('#push-hook-cfg').textContent = cfg;
-  $('#push-hook-cfg').hidden = false;
-  $('#btn-push-copy').hidden = false;
-  renderPush();
+  const url = new URL(`api/notify/setup/${r.code}`, location.href).href;
+  $('#push-setup-cmd').textContent = `curl -fsS '${url}' | sh`;
+  $('#push-setup-box').hidden = false;
+  const until = Date.now() + r.expiresMin * 60e3;
+  clearInterval(setupTimer);
+  const tick = () => {
+    const left = Math.max(0, Math.round((until - Date.now()) / 1000));
+    $('#push-setup-exp').textContent = left ? `1회용 · ${Math.floor(left / 60)}분 ${left % 60}초 후 만료 · 실행하면 이전 토큰은 무효` : '만료됨 — 다시 만드세요';
+    if (!left) clearInterval(setupTimer);
+  };
+  tick();
+  setupTimer = setInterval(tick, 1000);
 });
-$('#btn-push-copy').addEventListener('click', () => copyText($('#push-hook-cfg').textContent));
+$('#btn-push-copy').addEventListener('click', () => copyText($('#push-setup-cmd').textContent));
 
 async function openSecurity() {
   $('#sec-err').textContent = '';
@@ -382,6 +466,7 @@ async function openSecurity() {
   $('#sec-totp-on').hidden = !s.totp || !s.privateNet;
   $('#sec-totp-off').hidden = s.totp || !s.privateNet;
   $('#sec-private-only').hidden = s.privateNet;
+  renderPasskeys(s.privateNet);
   renderPush();
   if (!dlgSec.open) dlgSec.showModal();
 }
@@ -750,6 +835,8 @@ setInterval(keepAlive, 60 * 1000);
 function checkAuth() {
   return api('GET', 'api/me').then((r) => {
     setNeedCode(r.needCode);
+    if (r.passkey) pkInfo = r.passkey;
+    $('#login-pk-box').hidden = !(pkSupported && pkInfo.count > 0 && pkOriginOk());
     if (r.authed) route(); else showView('login');
   }, () => showView('login'));
 }

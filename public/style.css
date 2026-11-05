@@ -59,6 +59,9 @@ button:hover, .btn:hover { filter: brightness(.97); }
 .danger { color: var(--danger); }
 .small { padding: 4px 10px; font-size: 13px; }
 .icon { padding: 6px 10px; min-width: 38px; }
+.icon-btn svg { flex: none; }
+.dlg-title:focus { outline: none; }
+@media (max-width: 480px) { .hide-sm { display: none; } .icon-btn { padding: 7px 10px; } }
 
 input, select, textarea {
   font: inherit; font-size: 16px; /* iOS 확대 방지 */
@@ -73,6 +76,9 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 24px; }
 .login { width: 100%; max-width: 340px; display: flex; flex-direction: column; gap: 12px; }
 .login h1 { text-align: center; margin-bottom: 6px; }
+.or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 2px 0 10px; }
+.or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.pk-btn { width: 100%; }
 .login-step { display: flex; flex-direction: column; gap: 10px; }
 .login-hint { margin: 0; font-size: 14px; color: var(--muted); text-align: center; }
 .otp-input { text-align: center; font-size: 26px; letter-spacing: .45em; padding-left: calc(11px + .45em); font-family: ui-monospace, Consolas, monospace; }

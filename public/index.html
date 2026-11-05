@@ -28,6 +28,10 @@
       <button type="button" id="login-back" class="linklike">← 비밀번호 다시 입력</button>
     </div>
     <button class="primary" id="login-submit">로그인</button>
+    <div id="login-pk-box" hidden>
+      <p class="or"><span>또는</span></p>
+      <button type="button" class="ghost pk-btn" id="login-passkey">🔑 지문 · 패스키로 로그인</button>
+    </div>
     <p class="steps-dots" id="login-dots" hidden><span class="on"></span><span></span></p>
     <p class="err" id="login-err"></p>
   </form>
@@ -38,7 +42,7 @@
     <h1><span class="logo">&gt;_</span> Web SSH</h1>
     <div class="spacer"></div>
     <button id="btn-add" class="primary">+ 호스트</button>
-    <button id="btn-sec" class="ghost" title="2단계 인증 / 세션">보안</button>
+    <button id="btn-sec" class="ghost icon-btn" title="설정 (보안 · 알림)" aria-label="설정"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span class="hide-sm">설정</span></button>
     <button id="btn-logout" class="ghost">로그아웃</button>
   </header>
   <main id="host-list" class="list"></main>
@@ -122,7 +126,7 @@
 
 <dialog id="dlg-sec">
   <form id="sec-form" novalidate>
-    <h3>보안</h3>
+    <h3 tabindex="-1" autofocus class="dlg-title">설정</h3>
     <p class="muted" id="sec-net"></p>
     <section class="sec-block">
       <h4>2단계 인증 (OTP) <span id="sec-totp-state" class="badge"></span></h4>
@@ -145,6 +149,12 @@
       <p class="muted" id="sec-private-only" hidden>OTP 설정 변경은 내부망/VPN 에서만 할 수 있습니다.</p>
     </section>
     <section class="sec-block">
+      <h4>패스키 (지문 · Face ID) <span id="pk-state" class="badge"></span></h4>
+      <p class="muted" id="pk-help">등록하면 비밀번호·OTP 대신 지문이나 얼굴 인식으로 로그인합니다.</p>
+      <button type="button" class="primary" id="btn-pk-add">이 기기 등록</button>
+      <ul class="dev-list" id="pk-list"></ul>
+    </section>
+    <section class="sec-block">
       <h4>푸시 알림 <span id="push-state" class="badge"></span></h4>
       <p class="muted" id="push-help">Claude 작업 완료·입력 대기 등을 이 기기로 알려줍니다.</p>
       <div class="row tight wrap" id="push-actions">
@@ -154,14 +164,19 @@
       </div>
       <ul class="dev-list" id="push-subs"></ul>
       <details class="hook">
-        <summary>Claude Code 연동 (훅)</summary>
-        <p class="muted">Claude 가 실행되는 PC(WSL 등)에서 아래 스크립트를 만들고 훅에 등록합니다. 토큰은 알림 전송에만 쓰이며, 새로 발급하면 이전 토큰은 무효가 됩니다.</p>
+        <summary>Claude Code 연동</summary>
+        <p class="muted">설치 명령을 만들어 Claude 가 실행되는 곳(WSL · Linux · macOS 터미널)에 붙여 넣으면 끝입니다. 토큰 재발급도 같은 방법으로 합니다.</p>
         <div class="row tight wrap">
           <select id="push-host"></select>
-          <button type="button" class="ghost" id="btn-push-token">토큰 발급</button>
+          <button type="button" class="primary" id="btn-push-setup">설치 명령 만들기</button>
         </div>
-        <pre id="push-hook-cfg" hidden></pre>
-        <button type="button" class="ghost small" id="btn-push-copy" hidden>복사</button>
+        <div id="push-setup-box" hidden>
+          <pre id="push-setup-cmd"></pre>
+          <div class="row tight wrap">
+            <button type="button" class="ghost small" id="btn-push-copy">복사</button>
+            <small class="muted" id="push-setup-exp"></small>
+          </div>
+        </div>
       </details>
     </section>
     <section class="sec-block">
