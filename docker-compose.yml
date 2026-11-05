@@ -1,0 +1,13 @@
+version: "3.7" # DSM 7.1 docker-compose 1.28 호환
+services:
+  web-ssh:
+    build: .
+    image: web-ssh:latest
+    container_name: web-ssh
+    # host 네트워크: WOL 브로드캐스트 전송 + 내부망 접근을 위해 필요
+    network_mode: host
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # 빌드 컨텍스트 밖에 둔다 (컨테이너가 700 권한으로 잠가서 빌드 시 읽기 실패함)
+      - ../web-ssh-data:/data

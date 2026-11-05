@@ -1,0 +1,23 @@
+{
+  "name": "web-ssh",
+  "version": "1.0.0",
+  "description": "PC/모바일 브라우저용 웹 SSH 클라이언트 (Synology NAS Docker)",
+  "main": "server.js",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test/smoke.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "express": "^4.22.3",
+    "qrcode": "^1.5.4",
+    "ssh2": "^1.17.0",
+    "ws": "^8.22.1"
+  }
+}

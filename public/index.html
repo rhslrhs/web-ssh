@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="theme-color" content="#0d1117">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<title>Web SSH</title>
+<link rel="stylesheet" href="vendor/xterm/css/xterm.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<section id="view-login" class="view center" hidden>
+  <form id="login-form" class="card login">
+    <h1><span class="logo">&gt;_</span> Web SSH</h1>
+    <input type="password" id="login-pw" placeholder="앱 비밀번호" autocomplete="current-password" required autofocus>
+    <input type="text" id="login-code" placeholder="OTP 6자리" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="\d{6}" hidden>
+    <button class="primary">로그인</button>
+    <p class="err" id="login-err"></p>
+  </form>
+</section>
+
+<section id="view-list" class="view" hidden>
+  <header class="topbar">
+    <h1><span class="logo">&gt;_</span> Web SSH</h1>
+    <div class="spacer"></div>
+    <button id="btn-add" class="primary">+ 호스트</button>
+    <button id="btn-sec" class="ghost" title="2단계 인증 / 세션">보안</button>
+    <button id="btn-logout" class="ghost">로그아웃</button>
+  </header>
+  <main id="host-list" class="list"></main>
+</section>
+
+<section id="view-term" class="view" hidden>
+  <header class="topbar term-bar">
+    <a href="#/" class="btn ghost icon" title="목록으로 (연결 종료)">←</a>
+    <div class="term-title"><b id="term-name"></b><small id="term-status"></small></div>
+    <div class="spacer"></div>
+    <button class="ghost icon" data-act="font-" title="글자 작게">A−</button>
+    <button class="ghost icon" data-act="font+" title="글자 크게">A+</button>
+    <button class="ghost icon" data-act="input" title="입력창 (한글/붙여넣기)">⌨</button>
+    <button class="ghost icon" data-act="keys" title="특수키 바">Fn</button>
+  </header>
+  <div id="term-wrap">
+    <div id="term"></div>
+    <div id="term-overlay" hidden>
+      <p id="overlay-msg"></p>
+      <div class="row center-row">
+        <button class="primary" id="btn-reconnect">다시 연결</button>
+        <a class="btn ghost" href="#/">목록</a>
+      </div>
+    </div>
+  </div>
+  <form id="line-input" hidden>
+    <input id="line-text" placeholder="입력 후 Enter (한글·붙여넣기)" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <button type="button" id="line-noenter" class="ghost" title="Enter 없이 입력">입력</button>
+    <button class="primary" title="입력 + Enter">↵</button>
+  </form>
+  <div id="keybar"></div>
+</section>
+
+<dialog id="dlg-host">
+  <form id="host-form" novalidate>
+    <h3 id="host-form-title">호스트 추가</h3>
+    <div class="grid">
+      <label>이름<input name="name" placeholder="예: NAS"></label>
+      <label>그룹<input name="group" placeholder="예: 집" list="group-list"></label>
+      <datalist id="group-list"></datalist>
+      <label class="wide">호스트 (IP / 도메인)<input name="host" required placeholder="192.168.0.10" autocapitalize="off" spellcheck="false"></label>
+      <label>포트<input name="port" type="number" min="1" max="65535" value="22"></label>
+      <label>사용자<input name="username" required autocapitalize="off" spellcheck="false"></label>
+      <label class="wide">인증 방식
+        <select name="authType">
+          <option value="ask">접속할 때마다 비밀번호 입력</option>
+          <option value="password">비밀번호 저장 (암호화)</option>
+          <option value="key">개인키 (SSH key)</option>
+        </select>
+      </label>
+      <label class="wide auth-password">비밀번호<input name="password" type="password" autocomplete="new-password"></label>
+      <label class="wide auth-key">개인키 (OpenSSH / PEM)
+        <textarea name="privateKey" rows="4" spellcheck="false" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+        <input type="file" id="key-file">
+      </label>
+      <label class="wide auth-key">키 암호 (passphrase, 없으면 비움)<input name="passphrase" type="password" autocomplete="new-password"></label>
+      <label class="wide">점프 호스트 (경유)
+        <select name="jumpId"></select>
+        <small>Hyper-V 내부/Default Switch VM → Windows PC 를 선택</small>
+      </label>
+      <label class="wide">접속 후 실행 명령 (선택)
+        <input name="command" placeholder="예: wsl -d Ubuntu -- tmux new -As claude" autocapitalize="off" spellcheck="false">
+        <small>비우면 기본 셸. 명령이 끝나면 연결도 종료됩니다.</small>
+      </label>
+      <label>WOL MAC<input name="mac" placeholder="AA:BB:CC:DD:EE:FF" autocapitalize="characters" spellcheck="false"></label>
+      <label>WOL 브로드캐스트<input name="wolBroadcast" placeholder="기본값 사용" spellcheck="false"></label>
+    </div>
+    <div id="hostkey-info" class="hostkey" hidden>
+      <span>호스트 키 <code id="hostkey-fp"></code></span>
+      <button type="button" class="ghost small" id="btn-reset-hk">초기화</button>
+    </div>
+    <p class="err" id="host-err"></p>
+    <div class="row">
+      <button type="button" class="ghost danger" id="btn-del">삭제</button>
+      <div class="spacer"></div>
+      <button type="button" class="ghost" id="btn-host-cancel">취소</button>
+      <button type="submit" class="primary">저장</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-sec">
+  <form id="sec-form" novalidate>
+    <h3>보안</h3>
+    <p class="muted" id="sec-net"></p>
+    <section class="sec-block">
+      <h4>2단계 인증 (OTP) <span id="sec-totp-state" class="badge"></span></h4>
+      <div id="sec-totp-off" hidden>
+        <p class="muted">Google Authenticator, Microsoft Authenticator 같은 앱의 6자리 코드를 로그인할 때 함께 입력합니다. <b>외부에서 접속하려면 반드시 필요합니다.</b></p>
+        <button type="button" class="primary" id="btn-totp-start">설정 시작</button>
+        <div id="sec-totp-setup" hidden>
+          <ol class="steps">
+            <li>인증 앱에서 QR 코드를 스캔하세요.<br><img id="sec-qr" alt="OTP QR 코드" width="180" height="180"></li>
+            <li>스캔이 안 되면 키를 직접 입력하세요: <code id="sec-secret"></code></li>
+            <li>앱에 표시된 6자리 코드를 입력하세요.</li>
+          </ol>
+          <div class="row tight"><input id="sec-code-enable" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"><button type="button" class="primary" id="btn-totp-enable">확인</button></div>
+        </div>
+      </div>
+      <div id="sec-totp-on" hidden>
+        <p class="muted">설정되어 있습니다. 해제하려면 현재 코드를 입력하세요.</p>
+        <div class="row tight"><input id="sec-code-disable" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"><button type="button" class="ghost danger" id="btn-totp-disable">해제</button></div>
+      </div>
+      <p class="muted" id="sec-private-only" hidden>OTP 설정 변경은 내부망/VPN 에서만 할 수 있습니다.</p>
+    </section>
+    <section class="sec-block">
+      <h4>세션</h4>
+      <p class="muted">모든 기기(이 기기 포함)에서 로그아웃합니다. 휴대폰을 잃어버렸을 때 사용하세요.</p>
+      <button type="button" class="ghost danger" id="btn-logout-all">모든 기기 로그아웃</button>
+    </section>
+    <p class="err" id="sec-err"></p>
+    <div class="row end"><button type="button" class="ghost" id="btn-sec-close">닫기</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-ask">
+  <form id="ask-form" novalidate>
+    <h3 id="ask-title"></h3>
+    <div id="ask-body"></div>
+    <div class="row end">
+      <button type="submit" class="primary" id="ask-ok">확인</button>
+      <button type="button" class="ghost" id="ask-cancel">취소</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" hidden></div>
+
+<script src="vendor/xterm/lib/xterm.js"></script>
+<script src="vendor/addon-fit/lib/addon-fit.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
