@@ -26,8 +26,7 @@ PC·모바일 **브라우저만으로** 쓰는 셀프호스팅 SSH 클라이언�
 ```bash
 git clone https://github.com/rhslrhs/web-ssh.git
 cd web-ssh
-cp .env.example .env          # APP_PASSWORD 등 수정
-mkdir -p ../web-ssh-data      # 데이터 폴더 (시놀로지는 자동 생성 안 됨)
+./gen-env.sh                  # .env 생성 (무작위 비밀번호·암호화 키, WOL 주소 감지, 데이터 폴더 생성)
 docker compose up -d --build  # 구버전: docker-compose up -d --build
 ```
 `http://<서버 IP>:8822` 접속 → 앱 비밀번호로 로그인 → **+ 호스트**.
