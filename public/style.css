@@ -31,7 +31,8 @@
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; }
+/* 모바일 "당겨서 새로고침"·바운스 끄기 (터미널 스크롤 중 페이지가 새로고침되는 것 방지) */
+html, body { margin: 0; height: 100%; overscroll-behavior: none; }
 body {
   background: var(--bg);
   color: var(--text);
@@ -149,7 +150,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .term-title small.err { color: #f85149; }
 .term-title small.busy { color: #d29922; }
 #term-wrap { flex: 1; min-height: 0; position: relative; padding: 4px 0 0 6px; }
-#term { width: 100%; height: 100%; }
+/* 터미널 위 터치는 브라우저가 스크롤/새로고침/확대로 가로채지 않고 앱(setupTouchScroll)이 처리 */
+#term { width: 100%; height: 100%; touch-action: none; }
 #term-overlay {
   position: absolute; inset: 0; background: rgba(13, 17, 23, .82);
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 16px;
