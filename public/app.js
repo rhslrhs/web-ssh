@@ -869,14 +869,58 @@ async function openTerm(id) {
   connect();
 }
 
+// ── 자동 재연결 ──
+// 폰에서 앱을 백그라운드로 내리면 OS 가 네트워크를 멈춰 연결이 끊긴다(서버도 응답 없는 연결을 정리).
+// 셸 종료·접속 오류·로그인 만료가 아니라 "연결만 끊긴" 경우, 화면으로 돌아오거나 네트워크가 돌아오면
+// 자동으로 다시 붙는다. tmux 안이면 작업 화면 그대로 이어서 보인다.
+let dropped = false;      // 연결만 끊긴 상태 (자동 재연결 대상)
+let retryCount = 0;
+let retryTimer = null;
+const RETRY_DELAYS = [800, 2500, 6000];
+
+function scheduleRetry() {
+  clearTimeout(retryTimer);
+  if (retryCount >= RETRY_DELAYS.length) {
+    setStatus('끊김', 'err');
+    showOverlay('서버와의 연결이 끊어졌습니다.');
+    return;
+  }
+  setStatus('다시 연결 중...', 'busy');
+  retryTimer = setTimeout(reconnectNow, RETRY_DELAYS[retryCount++]);
+}
+
+async function reconnectNow() {
+  clearTimeout(retryTimer);
+  if (!curHostId || $('#view-term').hidden) return;
+  // 백그라운드에 있던 사이 로그인이 만료됐으면 로그인 화면으로
+  const me = await api('GET', 'api/me').catch(() => null);
+  if (me && !me.authed) { showView('login'); toast('로그인이 만료되어 다시 로그인해야 합니다.', 4000); return; }
+  const id = curHostId;
+  disconnect();
+  curHostId = id;
+  connect();
+}
+
+// 화면으로 돌아왔을 때 / 네트워크가 돌아왔을 때 / 뒤로가기 캐시에서 복원됐을 때
+function resumeIfDropped() {
+  if (document.hidden || !dropped || $('#view-term').hidden) return;
+  retryCount = 0;
+  reconnectNow();
+}
+document.addEventListener('visibilitychange', resumeIfDropped);
+window.addEventListener('online', resumeIfDropped);
+window.addEventListener('pageshow', (e) => { if (e.persisted) resumeIfDropped(); });
+
 function connect() {
   $('#term-overlay').hidden = true;
   term.reset();
   setStatus('연결 중...', 'busy');
+  dropped = false;
   const sock = new WebSocket(new URL('ws', location.href).href.replace(/^http/, 'ws'));
   sock.binaryType = 'arraybuffer';
   ws = sock;
   let gotEnd = false;
+  let wasReady = false;
   sock.onopen = () => {
     try { fit.fit(); } catch { /* ignore */ }
     sock.send(JSON.stringify({ t: 'connect', hostId: curHostId, cols: term.cols, rows: term.rows }));
@@ -893,7 +937,7 @@ function connect() {
         if (sock === ws && !gotEnd && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: 'answer', id: m.id, value }));
         break;
       }
-      case 'ready': setStatus('연결됨', 'ok'); scheduleFit(); focusInput(); break;
+      case 'ready': wasReady = true; retryCount = 0; setStatus('연결됨', 'ok'); scheduleFit(); focusInput(); break;
       case 'error': gotEnd = true; dismissAsk(); setStatus('오류', 'err'); showOverlay(m.msg); break;
       case 'closed': gotEnd = true; dismissAsk(); setStatus('종료됨', 'err'); showOverlay('연결이 종료되었습니다.'); break;
     }
@@ -901,17 +945,28 @@ function connect() {
   sock.onclose = () => {
     if (sock !== ws) return;
     dismissAsk();
-    if (!gotEnd) { setStatus('끊김', 'err'); showOverlay('서버와의 연결이 끊어졌습니다.'); }
+    if (gotEnd) return;
+    // 한 번이라도 연결됐던 세션이 "연결만" 끊김 → 자동 재연결 (처음부터 접속이 안 된 경우는 반복하지 않음)
+    if (wasReady) {
+      dropped = true;
+      if (document.hidden) setStatus('끊김 — 돌아오면 다시 연결', 'err');
+      else scheduleRetry();
+      return;
+    }
+    setStatus('끊김', 'err');
+    showOverlay('서버와의 연결이 끊어졌습니다.');
   };
 }
 
 function disconnect() {
   dismissAsk();
+  clearTimeout(retryTimer);
+  dropped = false;
   if (ws) { const s = ws; ws = null; s.onclose = null; s.close(); }
   curHostId = null;
 }
 
-$('#btn-reconnect').addEventListener('click', () => { const id = curHostId; disconnect(); curHostId = id; connect(); });
+$('#btn-reconnect').addEventListener('click', () => { retryCount = 0; reconnectNow(); });
 
 // 상단 버튼
 for (const b of document.querySelectorAll('.term-bar [data-act]')) {
