@@ -876,11 +876,14 @@ async function openTerm(id) {
 let dropped = false;      // 연결만 끊긴 상태 (자동 재연결 대상)
 let retryCount = 0;
 let retryTimer = null;
+let retrying = false;     // 재연결 시도로 연 소켓 (준비 전에 끊겨도 다음 시도를 이어간다)
+let reconnecting = false; // reconnectNow 진행 중 (중복 실행 방지)
 const RETRY_DELAYS = [800, 2500, 6000];
 
 function scheduleRetry() {
   clearTimeout(retryTimer);
   if (retryCount >= RETRY_DELAYS.length) {
+    retrying = false;
     setStatus('끊김', 'err');
     showOverlay('서버와의 연결이 끊어졌습니다.');
     return;
@@ -889,16 +892,28 @@ function scheduleRetry() {
   retryTimer = setTimeout(reconnectNow, RETRY_DELAYS[retryCount++]);
 }
 
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
+
 async function reconnectNow() {
   clearTimeout(retryTimer);
-  if (!curHostId || $('#view-term').hidden) return;
-  // 백그라운드에 있던 사이 로그인이 만료됐으면 로그인 화면으로
-  const me = await api('GET', 'api/me').catch(() => null);
-  if (me && !me.authed) { showView('login'); toast('로그인이 만료되어 다시 로그인해야 합니다.', 4000); return; }
   const id = curHostId;
-  disconnect();
-  curHostId = id;
-  connect();
+  if (!id || $('#view-term').hidden || reconnecting) return;
+  reconnecting = true;
+  setStatus('다시 연결 중...', 'busy');
+  try {
+    // 백그라운드에 있던 사이 로그인이 만료됐으면 로그인 화면으로 (네트워크가 덜 깨어났으면 기다리지 않고 진행)
+    const me = await withTimeout(api('GET', 'api/me'), 5000).catch(() => null);
+    // 기다리는 동안 다른 호스트로 옮겼거나 화면을 떠났으면 중단
+    if (curHostId !== id || $('#view-term').hidden) return;
+    if (me && !me.authed) { disconnect(); showView('login'); toast('로그인이 만료되어 다시 로그인해야 합니다.', 4000); return; }
+    if (me) lastPing = Date.now(); // 방금 로그인 연장됨 → keepAlive 가 곧바로 또 부르지 않게
+    disconnect();
+    curHostId = id;
+    retrying = true;
+    connect();
+  } finally {
+    reconnecting = false;
+  }
 }
 
 // 화면으로 돌아왔을 때 / 네트워크가 돌아왔을 때 / 뒤로가기 캐시에서 복원됐을 때
@@ -937,17 +952,24 @@ function connect() {
         if (sock === ws && !gotEnd && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: 'answer', id: m.id, value }));
         break;
       }
-      case 'ready': wasReady = true; retryCount = 0; setStatus('연결됨', 'ok'); scheduleFit(); focusInput(); break;
+      case 'ready': wasReady = true; retrying = false; retryCount = 0; setStatus('연결됨', 'ok'); scheduleFit(); focusInput(); break;
       case 'error': gotEnd = true; dismissAsk(); setStatus('오류', 'err'); showOverlay(m.msg); break;
       case 'closed': gotEnd = true; dismissAsk(); setStatus('종료됨', 'err'); showOverlay('연결이 종료되었습니다.'); break;
     }
   };
-  sock.onclose = () => {
+  sock.onclose = (ev) => {
     if (sock !== ws) return;
     dismissAsk();
-    if (gotEnd) return;
+    if (gotEnd) { retrying = false; return; }
+    // 서버가 로그인 만료로 닫음 (오류 메시지를 못 받았더라도) → 재연결하지 않고 로그인 화면으로
+    if (ev.code === 4001) {
+      retrying = false;
+      disconnect(); showView('login'); toast('로그인이 만료되어 다시 로그인해야 합니다.', 4000);
+      return;
+    }
     // 한 번이라도 연결됐던 세션이 "연결만" 끊김 → 자동 재연결 (처음부터 접속이 안 된 경우는 반복하지 않음)
-    if (wasReady) {
+    // 재연결 시도 중이던 소켓이 준비 전에 끊긴 경우도 다음 시도를 이어간다
+    if (wasReady || retrying) {
       dropped = true;
       if (document.hidden) setStatus('끊김 — 돌아오면 다시 연결', 'err');
       else scheduleRetry();
@@ -962,6 +984,7 @@ function disconnect() {
   dismissAsk();
   clearTimeout(retryTimer);
   dropped = false;
+  retrying = false;
   if (ws) { const s = ws; ws = null; s.onclose = null; s.close(); }
   curHostId = null;
 }
