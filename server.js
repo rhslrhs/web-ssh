@@ -19,7 +19,7 @@ if (config.TRUST_PROXY) app.set('trust proxy', 'loopback');
 
 // 외부(공인 IP) 접속 차단 / 허용 목록 — 정적 파일 포함 모든 요청
 app.use((req, res, next) => {
-  if (auth.networkAllowed(req)) return next();
+  if (auth.networkAllowed(req) && auth.hostAllowed(req)) return next();
   res.status(403).type('text').send('Forbidden');
 });
 
@@ -154,6 +154,10 @@ app.post('/api/notify', async (req, res) => {
 });
 
 const api = express.Router();
+// 화면이 주기적으로 부르는 상태 조회는 로그인 연장(활동)으로 치지 않는다 — 방치된 탭이 유휴 로그아웃을 막지 않도록.
+// 실제 활동 연장은 클라이언트 keepAlive(사용자 조작이 있을 때만 /api/me)가 맡는다.
+const BACKGROUND = /^\/(status|hosts\/[^/]+\/status)$/;
+api.use((req, res, next) => { if (req.method === 'GET' && BACKGROUND.test(req.path)) req.skipRenew = true; next(); });
 api.use(auth.requireAuth);
 const wrap = (fn) => (req, res) => {
   try { fn(req, res); } catch (e) {
@@ -240,7 +244,7 @@ const wss = new WebSocketServer({ noServer: true, maxPayload: 1 << 20 });
 server.on('upgrade', (req, socket, head) => {
   const { pathname } = new URL(req.url, 'http://x');
   if (pathname !== '/ws') return socket.destroy();
-  const sess = auth.networkAllowed(req) && auth.sameOrigin(req, true) ? auth.wsSession(req) : null;
+  const sess = auth.networkAllowed(req) && auth.hostAllowed(req) && auth.sameOrigin(req, true) ? auth.wsSession(req) : null;
   if (!sess) {
     socket.write('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n');
     return socket.destroy();
