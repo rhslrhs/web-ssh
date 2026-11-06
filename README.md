@@ -63,7 +63,7 @@ npm test                                       # 엔드투엔드 스모크 테�
 | `WOL_BROADCAST` | `255.255.255.255` | WOL 브로드캐스트 주소 (예: `192.168.0.255`) |
 | `SESSION_IDLE_MIN` | `30` | 이 시간(분) 동안 활동이 없으면 로그아웃. 쓰는 동안 자동 연장 |
 | `SESSION_MAX_HOURS` | `168` | 계속 써도 이 시간이 지나면 다시 로그인 (7일) |
-| `TRUST_PROXY` | `0` | 같은 장비의 리버스 프록시 뒤에 둘 때 `1` (`X-Real-IP` 사용) |
+| `TRUST_PROXY` | `0` | 같은 장비의 리버스 프록시 뒤에 둘 때 `1` (`X-Real-IP` 사용)<br>`1` 일 때 `X-Real-IP` 가 없는 프록시 요청은 외부 접속으로 취급. `0` 인데 프록시 헤더가 붙은 루프백 요청도 외부 취급 |
 | `PUBLIC_ACCESS` | `0` | 외부(공인 IP) 접속 허용. `0` 이면 LAN/VPN 외 전부 403 |
 | `ALLOW_PUBLIC_IPS` | (전체) | 외부 허용 IP/대역, 예: `203.0.113.7,198.51.100.0/24` |
 | `PUBLIC_ORIGIN` | | 외부 주소, 예: `https://ssh.example.synology.me` |
@@ -71,6 +71,7 @@ npm test                                       # 엔드투엔드 스모크 테�
 | `PUSH_SUBJECT` | `PUBLIC_ORIGIN` | Web Push VAPID 연락처 (https URL 또는 mailto:) |
 | `SSH_TIMEOUT_MS` | `20000` | SSH 서버 응답 대기 시간. 지문 확인·OTP 입력 등 사용자를 기다리는 동안은 멈춤 (입력 대기는 최대 5분) |
 | `PASSKEY_ORIGINS` | | 패스키를 허용할 주소 추가 (쉼표 구분). 기본은 `PUBLIC_ORIGIN` 과 localhost |
+| `ALLOWED_HOSTS` | | 추가로 허용할 접속 주소(Host) (쉼표 구분, `.example.com` 은 하위 도메인 포함, `*` 는 검사 끔). IP · localhost · 점 없는 장비 이름 · `.local`/`.lan`/`.home.arpa`/`.internal` · `PUBLIC_ORIGIN` · `PASSKEY_ORIGINS` 는 기본 허용 (DNS 리바인딩 방지) |
 
 데이터는 `../web-ssh-data` 에 저장됩니다. `.env` 와 함께 백업하세요.
 `hosts.json`(호스트·암호화된 인증정보) · `auth.json`(OTP) · `passkeys.json` · `push.json`(푸시 구독·VAPID 키) · `notify-token.json`(알림 토큰 해시) · `secret.key`(SECRET_KEY 미지정 시)
@@ -106,6 +107,9 @@ VPN 클라이언트를 설치할 수 없는 PC(예: 회사 PC)에서 브라우�
   출력만 지켜보는 동안에도 유휴 시간이 지나면 닫히므로, 오래 걸리는 작업은 **tmux 안에서** 실행하세요 — 연결이 닫혀도 작업은 계속되고 다시 접속하면 이어서 봅니다. 유휴 시간은 `SESSION_IDLE_MIN` 으로 조절합니다.
 - 터미널 앱의 클립보드 쓰기(OSC 52)는 기본 꺼짐 (⚙ 설정 → 클립보드). 켜도 크기 제한·내용 미리보기가 있고, 읽기 요청은 항상 무시.
 - DSM nginx 는 `X-Real-IP` 를 실제 접속 IP 로 덮어쓰지만 `X-Forwarded-For` 는 클라이언트 값이 그대로 통과하므로, 이 앱은 `X-Real-IP` 만, 그것도 루프백(같은 장비 프록시)에서 온 요청에서만 신뢰합니다.
+- 루프백 요청은 출처를 확신할 수 없으면 내부망으로 보지 않습니다 (fail-closed). `TRUST_PROXY=1` 인데 `X-Real-IP` 가 없거나(cloudflared·Caddy 기본 설정 등), `TRUST_PROXY=0` 인데 프록시 헤더가 붙어 있거나 `PUBLIC_ORIGIN` 주소로 들어온 요청은 외부 접속 규칙(OTP 필수 등)을 적용하고 로그에 경고를 남깁니다.
+- 처음 보는 Host 로 들어온 요청은 거부합니다 (DNS 리바인딩 방지). 내부망에서 도메인 이름으로 접속한다면 `ALLOWED_HOSTS` 에 추가하세요.
+- 화면이 주기적으로 보내는 상태 조회는 로그인 연장으로 치지 않습니다. 탭을 띄워 둔 채 자리를 비우면 유휴 시간 뒤 로그아웃됩니다.
 
 ## 푸시 알림 (Claude Code 완료 / 입력 대기)
 Claude Code 가 작업을 마치거나(Stop) 권한·입력을 기다릴 때(Notification) 폰/PC 로 알림을 보냅니다.

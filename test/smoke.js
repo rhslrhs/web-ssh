@@ -163,6 +163,7 @@ async function testExternal() {
   const web = await startWeb({ TRUST_PROXY: '1', PUBLIC_ACCESS: '1', ALLOW_PUBLIC_IPS: '203.0.113.0/24' });
   const PUB = { 'X-Real-IP': '203.0.113.7' };     // 허용 대역의 외부 IP (프록시가 넘겨준 것처럼)
   const DENY = { 'X-Real-IP': '198.51.100.9' };   // 허용 목록 밖
+  const LAN = { 'X-Real-IP': '192.168.0.10' };    // 프록시를 거친 내부망 접속
 
   assert.strictEqual((await fetch(base + '/', { headers: DENY })).status, 403); ok('허용 목록 밖 외부 IP 차단');
   const spoof = await fetch(base + '/', { headers: { ...DENY, 'X-Forwarded-For': '192.168.1.5' } });
@@ -172,9 +173,9 @@ async function testExternal() {
   assert.strictEqual(l.status, 403); ok('OTP 미설정 시 외부 로그인 거부');
 
   // 내부망에서 로그인 후 OTP 설정
-  l = await login({ password: 'testpassword' });
+  l = await login({ password: 'testpassword' }, LAN);
   assert.strictEqual(l.status, 200);
-  const A = { Cookie: l.cookie };
+  const A = { Cookie: l.cookie, ...LAN };
   let r = await post('/api/security/totp/start', {}, { ...A, ...PUB });
   assert.strictEqual(r.status, 403); ok('외부에서 OTP 설정 변경 불가');
   r = await post('/api/security/totp/start', {}, A);
@@ -188,7 +189,7 @@ async function testExternal() {
   assert.strictEqual(r.status, 200);
   const newCookie = (r.headers.get('set-cookie') || '').split(';')[0];
   assert.strictEqual((await fetch(base + '/api/hosts', { headers: A })).status, 401); ok('OTP 설정 → 기존 세션 무효화');
-  assert.strictEqual((await fetch(base + '/api/hosts', { headers: { Cookie: newCookie } })).status, 200); ok('설정한 기기는 로그인 유지');
+  assert.strictEqual((await fetch(base + '/api/hosts', { headers: { Cookie: newCookie, ...LAN } })).status, 200); ok('설정한 기기는 로그인 유지');
 
   l = await login({ password: 'testpassword' }, PUB);
   assert.strictEqual(l.status, 401); assert(l.data.needCode); ok('OTP 없이 로그인 거부');
@@ -217,8 +218,22 @@ async function testExternal() {
   // PUBLIC_ACCESS 꺼짐(기본값) → 외부 IP 전부 차단
   const web2 = await startWeb({ TRUST_PROXY: '1' });
   assert.strictEqual((await fetch(base + '/', { headers: PUB })).status, 403); ok('PUBLIC_ACCESS 기본값: 외부 차단');
-  assert.strictEqual((await fetch(base + '/')).status, 200); ok('내부망은 정상');
+  assert.strictEqual((await fetch(base + '/', { headers: LAN })).status, 200); ok('내부망은 정상');
+  // 프록시가 X-Real-IP 를 안 넣으면(cloudflared 등) 루프백이라도 내부망으로 보지 않는다
+  assert.strictEqual((await fetch(base + '/')).status, 403); ok('TRUST_PROXY=1 + X-Real-IP 없음 → 외부 취급 (fail-closed)');
+  assert.strictEqual((await fetch(base + '/', { headers: { 'X-Real-IP': 'garbage' } })).status, 403); ok('형식이 이상한 X-Real-IP → 외부 취급');
   await stopWeb(web2);
+
+  // TRUST_PROXY=0 인데 같은 장비 프록시 뒤에 둔 경우 (설정 누락)
+  const web3 = await startWeb({ PUBLIC_ACCESS: '1', PUBLIC_ORIGIN: 'https://ws.example.com' });
+  assert.strictEqual((await fetch(base + '/')).status, 200); ok('TRUST_PROXY=0: 프록시 헤더 없는 루프백은 내부망');
+  l = await login({ password: 'testpassword' }, { 'X-Forwarded-For': '203.0.113.7' });
+  assert.strictEqual(l.status, 403); ok('TRUST_PROXY=0 + 프록시 헤더 → 외부 취급 (OTP 없이 로그인 불가)');
+  l = await login({ password: 'testpassword' }, { 'X-Real-IP': '192.168.0.10' });
+  assert.strictEqual(l.status, 403); ok('TRUST_PROXY=0 이면 X-Real-IP 로 내부망 사칭 불가');
+  const viaHost = await rawRequest('POST', '/api/login', { Host: 'ws.example.com', 'Content-Type': 'application/json', Origin: 'https://ws.example.com' }, JSON.stringify({ password: 'testpassword' }));
+  assert.strictEqual(viaHost.status, 403); ok('TRUST_PROXY=0 + PUBLIC_ORIGIN 주소로 들어온 요청 → 외부 취급');
+  await stopWeb(web3);
 }
 
 // 프로세스가 바로 종료되는지 (시작 거부)
@@ -328,6 +343,26 @@ async function testReview2() {
   web = await startWeb({ TRUST_PROXY: '1', TRUST_CGNAT: '1' });
   assert.strictEqual((await fetch(base + '/', { headers: { 'X-Real-IP': '100.64.1.1' } })).status, 200); ok('TRUST_CGNAT=1: 내부망으로 취급 (Tailscale)');
   await stopWeb(web);
+
+  // DNS 리바인딩: 알 수 없는 Host 거부
+  web = await startWeb({ PUBLIC_ORIGIN: 'https://ws.example.com', ALLOWED_HOSTS: 'nas.example.org,.home.example' });
+  const hostStatus = async (h) => (await rawRequest('GET', '/', { Host: h })).status;
+  assert.strictEqual(await hostStatus('evil.example'), 403);
+  assert.strictEqual(await hostStatus('evil.example:18822'), 403); ok('알 수 없는 Host 거부 (DNS 리바인딩 방지)');
+  for (const h of ['127.0.0.1:18822', '192.168.0.5', '[::1]:18822', 'localhost', 'mynas:18822', 'mynas.local', 'nas.example.org', 'a.home.example', 'home.example']) {
+    assert.strictEqual(await hostStatus(h), 200, h);
+  }
+  ok('IP · localhost · 장비 이름 · .local · ALLOWED_HOSTS 는 허용');
+  await new Promise((res, rej) => {
+    const w = new WebSocket(`ws://127.0.0.1:${WEB_PORT}/ws`, { headers: { Host: 'evil.example', Origin: 'http://evil.example' } });
+    w.on('open', () => rej(new Error('rebinding ws accepted')));
+    w.on('error', () => res());
+  });
+  ok('알 수 없는 Host 의 WebSocket 거부');
+  await stopWeb(web);
+  web = await startWeb({ ALLOWED_HOSTS: '*' });
+  assert.strictEqual(await hostStatus('anything.example'), 200); ok('ALLOWED_HOSTS=* 이면 Host 검사 끔');
+  await stopWeb(web);
 }
 
 async function testSessionAndPush() {
@@ -341,6 +376,8 @@ async function testSessionAndPush() {
   const cookieOf = (r) => (r.headers.get('set-cookie') || '').split(';')[0];
   const getHosts = (ck) => fetch(base + '/api/hosts', { headers: { Cookie: ck } });
   await at(7);                                   // 첫 쿠키 만료 t0+15 (여유 8초)
+  const st = await fetch(base + '/api/status', { headers: { Cookie: first.cookie } });
+  assert(st.status === 200 && !st.headers.get('set-cookie')); ok('주기적 상태 조회는 로그인을 연장하지 않음');
   let r = await getHosts(first.cookie);
   const renewed = cookieOf(r);
   assert(r.status === 200 && renewed.startsWith('wssh=') && renewed !== first.cookie); ok('활동하면 새 만료 시각으로 쿠키 갱신');
@@ -592,16 +629,17 @@ async function testReview3() {
   await stopWeb(web);
 
   // PUBLIC_ORIGIN 으로 들어온 요청: 설치 스크립트는 https 공개 주소, 쿠키는 Secure
-  web = await startWeb({ PUBLIC_ORIGIN: 'https://ws.example.com' });
-  const lg = await rawRequest('POST', '/api/login', { Host: 'ws.example.com', 'Content-Type': 'application/json' }, JSON.stringify({ password: 'testpassword' }));
+  web = await startWeb({ TRUST_PROXY: '1', PUBLIC_ORIGIN: 'https://ws.example.com' });
+  const PX = { Host: 'ws.example.com', 'X-Real-IP': '192.168.0.10' }; // 같은 장비 프록시를 거친 내부망 접속
+  const lg = await rawRequest('POST', '/api/login', { ...PX, 'Content-Type': 'application/json' }, JSON.stringify({ password: 'testpassword' }));
   const setCookie = String(lg.headers['set-cookie']);
-  assert(/Secure/.test(setCookie), setCookie); ok('PUBLIC_ORIGIN(https) 으로 들어온 로그인 → Secure 쿠키 (프록시 헤더 없어도)');
+  assert(/Secure/.test(setCookie), setCookie); ok('PUBLIC_ORIGIN(https) 으로 들어온 로그인 → Secure 쿠키 (X-Forwarded-Proto 없어도)');
   const ck = setCookie.split(';')[0];
-  const sc = await rawRequest('POST', '/api/push/setup', { Host: 'ws.example.com', 'Content-Type': 'application/json', Origin: 'https://ws.example.com', Cookie: ck }, '{}');
+  const sc = await rawRequest('POST', '/api/push/setup', { ...PX, 'Content-Type': 'application/json', Origin: 'https://ws.example.com', Cookie: ck }, '{}');
   const { code } = JSON.parse(sc.body);
-  const scr = await rawRequest('POST', `/api/notify/setup/${code}`, { Host: 'ws.example.com' });
+  const scr = await rawRequest('POST', `/api/notify/setup/${code}`, PX);
   assert(scr.body.includes("'https://ws.example.com/api/notify'") && !scr.body.includes('http://ws.example.com'), scr.body.slice(0, 400)); ok('설치 스크립트 주소에 https 공개 주소 사용');
-  const lgLan = await login({ password: 'testpassword' });
+  const lgLan = await login({ password: 'testpassword' }, { 'X-Real-IP': '192.168.0.10' });
   assert(lgLan.status === 200);
   await stopWeb(web);
 
