@@ -64,6 +64,7 @@ button:hover, .btn:hover { filter: brightness(.97); }
 .icon-btn svg { flex: none; }
 .dlg-title:focus { outline: none; }
 @media (max-width: 480px) { .hide-sm { display: none; } .icon-btn { padding: 7px 10px; } }
+.force-narrow .hide-sm { display: none; } .force-narrow .icon-btn { padding: 7px 10px; } /* 데스크톱 모드 강제 모바일 (mobilefix.js) */
 
 input, select, textarea {
   font: inherit; font-size: 16px; /* iOS 확대 방지 */
@@ -202,6 +203,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
 .grid small { font-size: 12px; }
 .grid input[type=file] { font-size: 13px; padding: 6px; }
 @media (max-width: 480px) { .grid { grid-template-columns: 1fr; } }
+.force-narrow .grid { grid-template-columns: 1fr; }
 .row { display: flex; gap: 8px; align-items: center; margin-top: 16px; }
 .row.end { flex-direction: row-reverse; justify-content: flex-start; } /* 확인 버튼이 DOM 상 먼저(Enter 기본값) */
 .hostkey { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-size: 13px; color: var(--muted); }
@@ -239,6 +241,11 @@ h4 { margin: 0 0 8px; font-size: 15px; display: flex; align-items: center; gap: 
   .term-bar { padding-left: 6px; padding-right: 6px; }
   .term-bar .icon { min-width: 34px; padding: 6px 8px; }
 }
+.force-narrow .topbar { padding-left: 12px; padding-right: 12px; gap: 6px; }
+.force-narrow .topbar h1 { font-size: 16px; }
+.force-narrow .topbar > button { padding: 7px 11px; }
+.force-narrow .term-bar { padding-left: 6px; padding-right: 6px; }
+.force-narrow .term-bar .icon { min-width: 34px; padding: 6px 8px; }
 
 /* 터미널 화면에서는 특수키 바 위로 */
 #view-term:not([hidden]) ~ #toast { bottom: calc(120px + env(safe-area-inset-bottom)); }

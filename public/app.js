@@ -765,7 +765,9 @@ function scheduleFit() {
 function layoutViewport() {
   const vv = window.visualViewport;
   const v = $('#view-term');
-  if (vv) { v.style.height = vv.height + 'px'; v.style.top = vv.offsetTop + 'px'; }
+  // 데스크톱 모드에서 페이지를 확대해 둔 경우(mobilefix.js) 확대 배율만큼 나눠야 화면에 맞는다
+  const z = window.uiZoom || 1;
+  if (vv) { v.style.height = vv.height / z + 'px'; v.style.top = vv.offsetTop / z + 'px'; }
   scheduleFit();
 }
 if (window.visualViewport) {
