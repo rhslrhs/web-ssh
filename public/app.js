@@ -772,6 +772,13 @@ function layoutViewport() {
 }
 if (window.visualViewport) {
   visualViewport.addEventListener('resize', layoutViewport);
+  // 키보드가 올라와 대화창이 작아지면 입력 중인 칸이 가려지지 않게 다시 보이는 위치로
+  visualViewport.addEventListener('resize', () => {
+    const el = document.activeElement;
+    if (el && el.closest && el.closest('dialog[open]') && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName)) {
+      setTimeout(() => el.scrollIntoView({ block: 'nearest' }), 50);
+    }
+  });
   visualViewport.addEventListener('scroll', layoutViewport);
 }
 

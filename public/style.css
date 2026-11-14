@@ -192,11 +192,23 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 
 /* ── 다이얼로그 ── */
 dialog {
-  border: 1px solid var(--border); border-radius: 14px; padding: 20px;
+  border: 1px solid var(--border); border-radius: 14px; padding: 0 20px;
   background: var(--surface); color: var(--text);
   width: min(560px, calc(var(--vw100, 100vw) - 32px)); max-height: calc(var(--vh100, 100dvh) - 32px);
+  overflow: auto; overscroll-behavior: contain;
 }
 dialog::backdrop { background: rgba(0, 0, 0, .5); }
+/* 제목·버튼 줄은 고정, 가운데 내용만 스크롤 (내용이 길거나 키보드가 올라와 창이 작아져도 버튼이 보이게) */
+dialog > h3:first-child, dialog > form > h3:first-child {
+  position: sticky; top: 0; z-index: 2; background: var(--surface);
+  margin: 0 -20px 4px; padding: 20px 20px 10px;
+}
+dialog > .row:last-child, dialog > form > .row:last-child {
+  position: sticky; bottom: 0; z-index: 2; background: var(--surface);
+  margin: 16px -20px 0; padding: 12px 20px 20px; border-top: 1px solid var(--border);
+}
+/* 입력칸으로 스크롤할 때 고정된 제목·버튼 줄에 가리지 않게 */
+dialog input, dialog select, dialog textarea { scroll-margin: 64px 0 84px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
 .grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
 .grid label.wide { grid-column: 1 / -1; }
