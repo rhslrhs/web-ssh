@@ -64,6 +64,7 @@ npm test                                       # 엔드투엔드 스모크 테�
 | `SESSION_IDLE_MIN` | `30` | 이 시간(분) 동안 활동이 없으면 로그아웃. 쓰는 동안 자동 연장 |
 | `SESSION_MAX_HOURS` | `168` | 계속 써도 이 시간이 지나면 다시 로그인 (7일) |
 | `TRUST_PROXY` | `0` | 같은 장비의 리버스 프록시 뒤에 둘 때 `1` (`X-Real-IP` 사용)<br>`1` 일 때 `X-Real-IP` 가 없는 프록시 요청은 외부 접속으로 취급. `0` 인데 프록시 헤더가 붙은 루프백 요청도 외부 취급 |
+| `TRUSTED_PROXIES` | | 리버스 프록시가 **다른 장비**에 있을 때 그 주소 (쉼표 구분, IPv4·CIDR). 예: NAS 의 DSM 프록시 → VM 의 web-ssh 면 `192.168.1.99`. 지정하면 `TRUST_PROXY=1` 로 동작. 빠뜨리면 그 장비에서 프록시 헤더를 달고 온 요청은 외부 접속으로 취급 |
 | `PUBLIC_ACCESS` | `0` | 외부(공인 IP) 접속 허용. `0` 이면 LAN/VPN 외 전부 403 |
 | `ALLOW_PUBLIC_IPS` | (전체) | 외부 허용 IP/대역, 예: `203.0.113.7,198.51.100.0/24` |
 | `PUBLIC_ORIGIN` | | 외부 주소, 예: `https://ssh.example.synology.me` |

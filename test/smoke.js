@@ -660,6 +660,32 @@ async function testReview3() {
   await stopWeb(web);
 }
 
+// 다른 장비의 리버스 프록시 (NAS DSM → VM web-ssh) — clientIp 판정을 별도 프로세스에서 직접 확인
+function testRemoteProxy() {
+  console.log('[다른 장비의 리버스 프록시]');
+  const { execFileSync } = require('child_process');
+  const run = (env) => JSON.parse(execFileSync(process.execPath, ['-e', `
+    const a = require(${JSON.stringify(path.join(APP, 'lib/auth'))});
+    const r = (peer, headers = {}) => a.clientIp({ socket: { remoteAddress: peer }, headers: { host: '192.168.1.100:8822', ...headers } });
+    console.log(JSON.stringify({
+      proxied: r('192.168.1.99', { 'x-real-ip': '203.0.113.9' }),
+      proxiedNoReal: r('192.168.1.99', {}),
+      viaPublicHost: r('192.168.1.99', { host: 'ws.example.org' }),
+      lanDirect: r('192.168.1.50'),
+      lanSpoof: r('192.168.1.50', { 'x-real-ip': '10.0.0.1' }),
+      publicPeer: r('198.51.100.7', { 'x-real-ip': '10.0.0.1' }),
+    }));`], { env: { ...process.env, APP_PASSWORD: 'testpassword', DATA_DIR: newDataDir(), SECRET_KEY: '', PUBLIC_ORIGIN: 'https://ws.example.org', ...env } }).toString().trim().split('\n').pop());
+  let r = run({ TRUSTED_PROXIES: '' , TRUST_PROXY: '1' });
+  assert.strictEqual(r.proxied, 'unknown'); ok('TRUSTED_PROXIES 없이 다른 장비 프록시 → 외부 취급 (프록시 주소를 내부망으로 보지 않음)');
+  assert.strictEqual(r.viaPublicHost, 'unknown'); ok('공개 주소로 들어온 다른 장비 요청 → 외부 취급');
+  assert.strictEqual(r.lanDirect, '192.168.1.50'); ok('LAN 에서 직접 접속은 그대로 내부망');
+  r = run({ TRUSTED_PROXIES: '192.168.1.99' });
+  assert.strictEqual(r.proxied, '203.0.113.9'); ok('TRUSTED_PROXIES 의 프록시 → X-Real-IP 사용');
+  assert.strictEqual(r.proxiedNoReal, 'unknown'); ok('신뢰 프록시인데 X-Real-IP 없음 → 외부 취급');
+  assert.strictEqual(r.lanSpoof, 'unknown'); ok('신뢰하지 않는 LAN 장비의 X-Real-IP 는 무시 (외부 취급)');
+  assert.strictEqual(r.publicPeer, '198.51.100.7'); ok('외부 IP 의 X-Real-IP 로 내부망 사칭 불가');
+}
+
 function testTotpUnit() {
   console.log('[TOTP]');
   // RFC 6238 테스트 벡터 (SHA1, 비밀키 "12345678901234567890")
@@ -681,6 +707,7 @@ function testTotpUnit() {
     await testSessionAndPush();
     await testPasskey();
     await testReview3();
+    testRemoteProxy();
     console.log('ALL PASSED');
     process.exitCode = 0;
   } catch (e) {

@@ -15,7 +15,10 @@ const passkey = require('./lib/passkey');
 const app = express();
 app.disable('x-powered-by');
 // 같은 장비의 리버스 프록시(DSM nginx → localhost)만 신뢰 (req.secure 판단용)
-if (config.TRUST_PROXY) app.set('trust proxy', 'loopback');
+if (config.TRUST_PROXY) {
+  const { isLoopback } = require('./lib/netpolicy');
+  app.set('trust proxy', (addr) => isLoopback(addr) || !!(config.trustedProxy && config.trustedProxy(addr)));
+}
 
 // 외부(공인 IP) 접속 차단 / 허용 목록 — 정적 파일 포함 모든 요청
 app.use((req, res, next) => {
