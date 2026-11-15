@@ -94,6 +94,12 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); ou
 .or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 13px; margin: 2px 0 10px; }
 .or::before, .or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
 .pk-btn { width: 100%; }
+/* 패스키가 등록돼 있으면 패스키 로그인을 먼저 (비밀번호 입력은 "비밀번호로 로그인" 을 눌렀을 때) */
+#login-use-pw { display: none; margin-top: 10px; }
+.login.pk-first #login-step1, .login.pk-first #login-step2, .login.pk-first #login-submit,
+.login.pk-first #login-dots, .login.pk-first .or { display: none; }
+.login.pk-first #login-use-pw { display: block; margin: 12px auto 0; }
+.login.pk-first .pk-btn { background: var(--accent); color: #fff; border-color: var(--accent); padding: 12px; font-size: 16px; }
 .login-step { display: flex; flex-direction: column; gap: 10px; }
 .login-hint { margin: 0; font-size: 14px; color: var(--muted); text-align: center; }
 .otp-input { text-align: center; font-size: 26px; letter-spacing: .45em; padding-left: calc(11px + .45em); font-family: ui-monospace, Consolas, monospace; }

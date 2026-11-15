@@ -45,13 +45,26 @@ function showView(name) {
   for (const v of ['login', 'list', 'term', 'wake']) $('#view-' + v).hidden = v !== name;
   // 터미널 화면에서만 당겨서 새로고침 막기 (CSS .in-term)
   document.documentElement.classList.toggle('in-term', name === 'term');
-  if (name === 'login') { disconnect(); setTimeout(() => $('#login-pw').focus(), 0); }
+  if (name === 'login') {
+    disconnect();
+    applyLoginMode();
+    // 패스키 우선 화면에서는 입력칸에 포커스를 주지 않는다 (폰에서 키보드가 올라오지 않게)
+    if (!pkFirst()) setTimeout(() => $('#login-pw').focus(), 0);
+  }
 }
 
 // ── 패스키 (WebAuthn) ──
 const pkSupported = !!(window.PublicKeyCredential && navigator.credentials && window.isSecureContext);
 let pkInfo = { count: 0, origins: [] };
 const pkOriginOk = () => location.hostname === 'localhost' || pkInfo.origins.includes(location.origin);
+const pkUsable = () => pkSupported && pkInfo.count > 0 && pkOriginOk();
+// 패스키 우선: 등록된 패스키가 있고 이 주소에서 쓸 수 있으면 패스키 로그인을 먼저 보여 준다 ("비밀번호로 로그인" 을 누르면 해제)
+let pwChosen = false;
+const pkFirst = () => pkUsable() && !pwChosen;
+function applyLoginMode() {
+  $('#login-pk-box').hidden = !pkUsable();
+  $('#login-form').classList.toggle('pk-first', pkFirst());
+}
 const toBuf = (s) => {
   const b = atob(s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4));
   return Uint8Array.from(b, (ch) => ch.charCodeAt(0)).buffer;
@@ -59,7 +72,13 @@ const toBuf = (s) => {
 const fromBuf = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const pkErr = (e) => (e && e.name === 'NotAllowedError' ? '취소되었거나 시간이 지났습니다.' : e && e.name === 'InvalidStateError' ? '이 기기는 이미 등록되어 있습니다.' : (e && e.message) || String(e));
 
-async function passkeyLogin() {
+let pkBusy = false;
+async function passkeyLogin({ quiet = false } = {}) {
+  if (pkBusy) return;
+  pkBusy = true;
+  try { await passkeyLoginInner(quiet); } finally { pkBusy = false; }
+}
+async function passkeyLoginInner(quiet) {
   $('#login-err').textContent = '';
   try {
     const o = await api('POST', 'api/passkey/login/options', {});
@@ -74,9 +93,22 @@ async function passkeyLogin() {
     } });
     $('#login-pw').value = '';
     route();
-  } catch (e) { $('#login-err').textContent = pkErr(e); }
+  } catch (e) { if (!quiet || e.name !== 'NotAllowedError') $('#login-err').textContent = pkErr(e); }
 }
-$('#login-passkey').addEventListener('click', passkeyLogin);
+$('#login-passkey').addEventListener('click', () => passkeyLogin());
+$('#login-use-pw').addEventListener('click', () => {
+  pwChosen = true;
+  $('#login-err').textContent = '';
+  applyLoginMode();
+  setLoginStep(1);
+});
+// 페이지를 처음 열었을 때 한 번만 패스키 창을 자동으로 띄운다 (취소하면 버튼으로 다시 시도)
+let pkAutoTried = false;
+function autoPasskey() {
+  if (pkAutoTried || !pkFirst() || document.hidden || $('#view-login').hidden) return;
+  pkAutoTried = true;
+  passkeyLogin({ quiet: true });
+}
 
 async function passkeyRegister() {
   const btn = $('#btn-pk-add');
@@ -1158,8 +1190,7 @@ function checkAuth() {
   return api('GET', 'api/me').then((r) => {
     setNeedCode(r.needCode);
     if (r.passkey) pkInfo = r.passkey;
-    $('#login-pk-box').hidden = !(pkSupported && pkInfo.count > 0 && pkOriginOk());
-    if (r.authed) route(); else showView('login');
+    if (r.authed) route(); else { showView('login'); autoPasskey(); }
   }, () => showView('login'));
 }
 window.addEventListener('hashchange', checkAuth);
