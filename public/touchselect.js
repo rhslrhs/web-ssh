@@ -91,7 +91,12 @@ function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll, onTap } = {}) {
     place();
   }
 
+  // 선택 중에는 키보드를 띄우지 않는다: 입력칸에 포커스가 남아 있으면(키보드를 내려도 포커스는 남음) 풀고,
+  // 선택하는 동안 어떤 경로로든 입력칸에 포커스가 오면 바로 푼다
+  const isTyping = (el2) => el2 && /^(INPUT|TEXTAREA)$/.test(el2.tagName) && !el2.closest('dialog');
+  document.addEventListener('focusin', (ev) => { if ((active || dragSel) && isTyping(ev.target)) ev.target.blur(); });
   function begin(p) {
+    if (isTyping(document.activeElement)) document.activeElement.blur();
     [a, b] = wordAt(p);
     active = true;
     ui.hidden = false;

@@ -732,8 +732,8 @@ function ensureTerm() {
   setupTouchSelect(term, $('#term'), $('#term-wrap'), {
     onCopy: (t) => copyText(t),
     onOpenAll: openCopyMode,
-    // 탭: 입력창을 쓰는 중이면 입력창(setupTouchScroll 이 처리), 아니면 터미널에 포커스 → 키보드
-    onTap: () => { if ($('#line-input').hidden) term.focus(); },
+    // 탭: 입력창을 쓰는 중이면 입력창(한글은 입력창이 안전), 아니면 터미널에 포커스 → 키보드
+    onTap: () => { if (!$('#line-input').hidden) $('#line-text').focus(); else term.focus(); },
   });
   setupTouchScroll($('#term')); // 선택 처리기 다음에 등록 (선택 중 끌기는 선택이 먼저 가로챔)
 }
@@ -772,8 +772,7 @@ function setupTouchScroll(el) {
     scrollTerm(n);
   }, { capture: true, passive: false });
   el.addEventListener('touchend', () => {
-    // 스크롤이 아닌 탭: 입력창을 쓰는 중이면 입력창에 포커스 (한글은 입력창이 안전)
-    if (lastY != null && !scrolling && !$('#line-input').hidden) setTimeout(() => $('#line-text').focus(), 0);
+    // 탭 판정·포커스는 touchselect.js(onTap)가 한다: 여기서 하면 살짝 움직여 취소된 길게 누르기도 탭으로 보고 키보드를 띄움
     lastY = null;
   }, { capture: true, passive: true });
   el.addEventListener('touchcancel', () => { lastY = null; }, { capture: true, passive: true });
