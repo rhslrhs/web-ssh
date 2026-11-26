@@ -7,7 +7,10 @@
 // eslint-disable-next-line no-unused-vars
 function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll, onTap } = {}) {
   const LONG_MS = 450;
-  const MOVE_TOL = 10;
+  // 손가락 떨림 허용 범위 (화면 기준 px). 터치 기본 동작을 꺼서 브라우저가 걸러 주던 미세한 움직임까지 들어오므로
+  // 넉넉히 잡고, 데스크톱 모드 확대(mobilefix.js) 중이면 좌표가 배율만큼 커지므로 곱해 준다
+  const MOVE_TOL = 16;
+  const tol = () => MOVE_TOL * (window.uiZoom || 1);
   let a = null; // 선택 시작 {x, y} (y 는 버퍼 절대 줄)
   let b = null; // 선택 끝 (포함)
   let active = false;
@@ -20,6 +23,8 @@ function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll, onTap } = {}) {
   let lastTouch = 0;
   let moved = false;
   let longFired = false;
+  let word0 = null; // 길게 눌러 처음 고른 단어 [시작, 끝]
+  let dragMoved = false;
 
   const ui = document.createElement('div');
   ui.className = 'tsel-ui';
@@ -135,7 +140,7 @@ function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll, onTap } = {}) {
   }
 
   // ── 터미널 위 터치 (capture 단계: 선택 동작일 때만 스크롤 처리기로 넘기지 않음) ──
-  const stop = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+  const stop = (ev) => { ev.preventDefault(); ev.stopImmediatePropagation(); }; // 같은 #term 의 스크롤 처리기도 건너뜀
   // 브라우저 기본 터치 동작(길게 누르기 메뉴·붙여넣기 팝업·텍스트 선택)은 끄고, 탭은 tapAt 이 직접 처리한다
   el.addEventListener('touchstart', (ev) => {
     lastTouch = Date.now();
@@ -153,6 +158,8 @@ function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll, onTap } = {}) {
       if (!start) return;
       longFired = true;
       begin(cellAt(start.x, start.y));
+      word0 = [a, b];
+      dragMoved = false;
       dragSel = true;
       tapClear = false;
     }, LONG_MS);
@@ -162,13 +169,17 @@ function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll, onTap } = {}) {
     const t = ev.touches[0];
     if (dragSel) {
       stop(ev);
+      // 떨림 정도로는 처음 고른 단어를 유지하고, 확실히 끌었을 때만 넓힌다 (단어는 항상 포함)
+      if (!dragMoved && Math.hypot(t.clientX - start.x, t.clientY - start.y) <= tol()) return;
+      dragMoved = true;
       const p = cellAt(t.clientX, t.clientY);
       edgeScroll(p.over);
-      b = { x: p.x, y: p.y };
+      const [ws, we] = word0;
+      if (cmp(p, ws) < 0) { a = { x: p.x, y: p.y }; b = we; } else { a = ws; b = cmp(p, we) > 0 ? { x: p.x, y: p.y } : we; }
       apply();
       return;
     }
-    if (Math.hypot(t.clientX - start.x, t.clientY - start.y) > MOVE_TOL) {
+    if (Math.hypot(t.clientX - start.x, t.clientY - start.y) > tol()) {
       moved = true;
       clearTimeout(timer);
       timer = null;
@@ -197,7 +208,12 @@ function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll, onTap } = {}) {
     if (onTap) onTap();
   }
   el.addEventListener('touchcancel', () => { clearTimeout(timer); timer = null; start = null; dragSel = false; }, { capture: true });
-  // 길게 누를 때 브라우저 기본 메뉴(이미지 저장 등) 막기
+  // xterm 자체 터치 스크롤(픽셀 단위)은 끈다: 앱 스크롤(setupTouchScroll)과 따로 움직여 손가락 떨림에도 화면이 밀림.
+  // #term 의 capture 처리기들이 먼저 실행된 뒤 xterm 요소에서 전파를 멈춘다
+  for (const type of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+    term.element.addEventListener(type, (ev) => ev.stopPropagation(), { capture: true, passive: true });
+  }
+    // 길게 누를 때 브라우저 기본 메뉴(이미지 저장 등) 막기
   el.addEventListener('contextmenu', (ev) => { if (Date.now() - lastTouch < 1500) ev.preventDefault(); });
 
   // 선택을 끌다가 화면 위/아래 끝을 넘어가면 기록을 스크롤 (일반 셸만)

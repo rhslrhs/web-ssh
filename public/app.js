@@ -729,13 +729,13 @@ function ensureTerm() {
     return true;
   });
   new ResizeObserver(scheduleFit).observe($('#term-wrap'));
-  setupTouchScroll($('#term'));
   setupTouchSelect(term, $('#term'), $('#term-wrap'), {
     onCopy: (t) => copyText(t),
     onOpenAll: openCopyMode,
     // 탭: 입력창을 쓰는 중이면 입력창(setupTouchScroll 이 처리), 아니면 터미널에 포커스 → 키보드
     onTap: () => { if ($('#line-input').hidden) term.focus(); },
   });
+  setupTouchScroll($('#term')); // 선택 처리기 다음에 등록 (선택 중 끌기는 선택이 먼저 가로챔)
 }
 
 // ── 모바일 터치 스크롤 ──
@@ -755,27 +755,28 @@ function setupTouchScroll(el) {
     lastY = e.touches[0].clientY;
     acc = 0;
     scrolling = false;
-  }, { passive: true });
+  }, { capture: true, passive: true });
   el.addEventListener('touchmove', (e) => {
     if (lastY == null || e.touches.length !== 1) return;
     const y = e.touches[0].clientY;
     acc += lastY - y; // 손가락을 위로 → 양수 → 아래 내용(최신 쪽)으로
     lastY = y;
     const lh = lineHeight();
-    if (!scrolling && Math.abs(acc) < lh * 0.6) return; // 탭(키보드 열기)과 구분
+    // 탭·길게 누르기(손가락 떨림)와 구분: 길게 누르기 허용 범위(touchselect.js)와 맞춘다
+    if (!scrolling && Math.abs(acc) < Math.max(lh * 0.6, 16 * (window.uiZoom || 1))) return;
     scrolling = true;
     e.preventDefault();
     const n = Math.trunc(acc / lh);
     if (!n) return;
     acc -= n * lh;
     scrollTerm(n);
-  }, { passive: false });
+  }, { capture: true, passive: false });
   el.addEventListener('touchend', () => {
     // 스크롤이 아닌 탭: 입력창을 쓰는 중이면 입력창에 포커스 (한글은 입력창이 안전)
     if (lastY != null && !scrolling && !$('#line-input').hidden) setTimeout(() => $('#line-text').focus(), 0);
     lastY = null;
-  }, { passive: true });
-  el.addEventListener('touchcancel', () => { lastY = null; }, { passive: true });
+  }, { capture: true, passive: true });
+  el.addEventListener('touchcancel', () => { lastY = null; }, { capture: true, passive: true });
 }
 
 function scrollTerm(n) {
