@@ -5,7 +5,7 @@
 // 선택 중 탭하면 선택 해제 (키보드는 열지 않음), 끌면 평소처럼 스크롤
 // xterm 자체 선택(term.select)을 쓰므로 tmux·vim 같은 전체 화면 프로그램에서도 화면 글자를 고를 수 있다.
 // eslint-disable-next-line no-unused-vars
-function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll } = {}) {
+function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll, onTap } = {}) {
   const LONG_MS = 450;
   const MOVE_TOL = 10;
   let a = null; // 선택 시작 {x, y} (y 는 버퍼 절대 줄)
@@ -18,6 +18,8 @@ function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll } = {}) {
   let tapClear = false; // 선택 중 탭 → 해제 후보
   let handleDrag = null; // 'a' | 'b'
   let lastTouch = 0;
+  let moved = false;
+  let longFired = false;
 
   const ui = document.createElement('div');
   ui.className = 'tsel-ui';
@@ -134,22 +136,27 @@ function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll } = {}) {
 
   // ── 터미널 위 터치 (capture 단계: 선택 동작일 때만 스크롤 처리기로 넘기지 않음) ──
   const stop = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+  // 브라우저 기본 터치 동작(길게 누르기 메뉴·붙여넣기 팝업·텍스트 선택)은 끄고, 탭은 tapAt 이 직접 처리한다
   el.addEventListener('touchstart', (ev) => {
     lastTouch = Date.now();
     clearTimeout(timer);
+    if (ev.cancelable) ev.preventDefault();
     if (ev.touches.length !== 1) { start = null; return; }
     const t = ev.touches[0];
     start = { x: t.clientX, y: t.clientY };
     dragSel = false;
+    moved = false;
+    longFired = false;
     tapClear = active;
     timer = setTimeout(() => {
       timer = null;
       if (!start) return;
+      longFired = true;
       begin(cellAt(start.x, start.y));
       dragSel = true;
       tapClear = false;
     }, LONG_MS);
-  }, { capture: true, passive: true });
+  }, { capture: true, passive: false });
   el.addEventListener('touchmove', (ev) => {
     if (!start || ev.touches.length !== 1) return;
     const t = ev.touches[0];
@@ -162,6 +169,7 @@ function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll } = {}) {
       return;
     }
     if (Math.hypot(t.clientX - start.x, t.clientY - start.y) > MOVE_TOL) {
+      moved = true;
       clearTimeout(timer);
       timer = null;
       tapClear = false; // 스크롤: 선택은 그대로 두고 평소처럼 스크롤
@@ -172,8 +180,22 @@ function setupTouchSelect(term, el, wrap, { onCopy, onOpenAll } = {}) {
     timer = null;
     if (dragSel) { dragSel = false; start = null; stop(ev); return; }
     if (tapClear) { tapClear = false; start = null; end(); stop(ev); return; }
+    // 그냥 탭: 기본 동작을 껐으므로 마우스 클릭(tmux 창 고르기 등)과 포커스(키보드)를 직접 만든다
+    if (start && !moved && !longFired && ev.cancelable) {
+      ev.preventDefault();
+      tapAt(start.x, start.y);
+    }
     start = null;
   }, { capture: true, passive: false });
+  function tapAt(x, y) {
+    const sc = screenEl();
+    if (sc) {
+      for (const type of ['mousedown', 'mouseup', 'click']) {
+        sc.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0, buttons: type === 'mousedown' ? 1 : 0 }));
+      }
+    }
+    if (onTap) onTap();
+  }
   el.addEventListener('touchcancel', () => { clearTimeout(timer); timer = null; start = null; dragSel = false; }, { capture: true });
   // 길게 누를 때 브라우저 기본 메뉴(이미지 저장 등) 막기
   el.addEventListener('contextmenu', (ev) => { if (Date.now() - lastTouch < 1500) ev.preventDefault(); });

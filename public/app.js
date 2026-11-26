@@ -730,7 +730,12 @@ function ensureTerm() {
   });
   new ResizeObserver(scheduleFit).observe($('#term-wrap'));
   setupTouchScroll($('#term'));
-  setupTouchSelect(term, $('#term'), $('#term-wrap'), { onCopy: (t) => copyText(t), onOpenAll: openCopyMode });
+  setupTouchSelect(term, $('#term'), $('#term-wrap'), {
+    onCopy: (t) => copyText(t),
+    onOpenAll: openCopyMode,
+    // 탭: 입력창을 쓰는 중이면 입력창(setupTouchScroll 이 처리), 아니면 터미널에 포커스 → 키보드
+    onTap: () => { if ($('#line-input').hidden) term.focus(); },
+  });
 }
 
 // ── 모바일 터치 스크롤 ──
@@ -859,8 +864,29 @@ function terminalText() {
 function openCopyMode() {
   const box = $('#copy-text');
   box.textContent = term ? terminalText() : '';
+  $('#copy-note').textContent = '';
   $('#dlg-copy').showModal();
   box.scrollTop = box.scrollHeight;
+  // 전체 화면 프로그램(tmux 등)은 터미널에 지난 출력이 없다 → 서버에서 tmux 기록을 받아 온다
+  if (term && term.buffer.active.type === 'alternate' && ws && ws.readyState === 1) {
+    captureId++;
+    $('#copy-note').textContent = 'tmux 기록 불러오는 중…';
+    wsSend({ t: 'capture', id: captureId });
+  }
+}
+let captureId = 0;
+function onCapture(m) {
+  if (m.id !== captureId || !$('#dlg-copy').open) return;
+  const note = $('#copy-note');
+  const text = (m.text || '').replace(/\s+$/, '');
+  if (m.error || !text) { note.textContent = '지금 화면만 표시' + (m.error ? ` (tmux 기록: ${m.error})` : ''); return; }
+  // 사용자가 이미 고르기 시작했으면 내용을 바꾸지 않는다
+  const s = getSelection();
+  if (s && !s.isCollapsed && $('#copy-text').contains(s.anchorNode)) { note.textContent = ''; return; }
+  const box = $('#copy-text');
+  box.textContent = text;
+  box.scrollTop = box.scrollHeight;
+  note.textContent = `tmux 기록 ${text.split('\n').length.toLocaleString()}줄 · 위로 올려 보세요`;
 }
 // 버튼을 누르는 순간 선택이 풀리는 브라우저가 있어 누르기 시작할 때 선택을 잡아 둔다
 let copySel = '';
@@ -887,6 +913,13 @@ $('#dlg-copy').addEventListener('close', () => { if (!$('#view-term').hidden && 
 
 // 입력창을 쓰는 중이면 입력창, 아니면 터미널에 포커스
 function focusInput() { if (!$('#line-input').hidden) $('#line-text').focus(); else if (term) term.focus(); }
+// 접속·재접속 때 자동 포커스. 휴대폰에서 실행 명령(tmux·Claude 등)이 있는 호스트는 먼저 화면을 보는 경우가 많아
+// 키보드를 띄우지 않는다 (터미널을 탭하면 열림)
+function autoFocus() {
+  const host = hosts.find((x) => x.id === curHostId);
+  if (host && host.command && matchMedia('(pointer: coarse)').matches) return;
+  focusInput();
+}
 
 function wsSend(o) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(o)); }
 function sendInput(d) { if (d) wsSend({ t: 'i', d }); }
@@ -916,7 +949,7 @@ async function openTerm(id) {
   showView('term');
   ensureTerm();
   layoutViewport();
-  if (curHostId === id && ws && ws.readyState <= 1) { focusInput(); return; }
+  if (curHostId === id && ws && ws.readyState <= 1) { autoFocus(); return; }
   if (!hosts.length) { try { hosts = await api('GET', 'api/hosts'); } catch { return; } }
   const host = hosts.find((x) => x.id === id);
   disconnect();
@@ -1009,7 +1042,8 @@ function connect() {
         if (sock === ws && !gotEnd && sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ t: 'answer', id: m.id, value }));
         break;
       }
-      case 'ready': wasReady = true; retrying = false; retryCount = 0; setStatus('연결됨', 'ok'); scheduleFit(); focusInput(); break;
+      case 'capture': onCapture(m); break;
+      case 'ready': wasReady = true; retrying = false; retryCount = 0; setStatus('연결됨', 'ok'); scheduleFit(); autoFocus(); break;
       case 'error': gotEnd = true; dismissAsk(); setStatus('오류', 'err'); showOverlay(m.msg); break;
       case 'closed': gotEnd = true; dismissAsk(); setStatus('종료됨', 'err'); showOverlay('연결이 종료되었습니다.'); break;
     }

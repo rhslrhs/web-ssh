@@ -9,6 +9,7 @@ const store = require('./lib/store');
 const { connectChain, tcpCheck } = require('./lib/ssh');
 const wol = require('./lib/wol');
 const push = require('./lib/push');
+const { runCapture } = require('./lib/capture');
 const notifyToken = require('./lib/notifytoken');
 const passkey = require('./lib/passkey');
 
@@ -270,6 +271,8 @@ wss.on('connection', (ws, req) => {
   let seq = 0;
   let cols = 80;
   let rows = 24;
+  let hostCommand = '';
+  let capturing = false;
   const pending = new Map();
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
@@ -287,6 +290,7 @@ wss.on('connection', (ws, req) => {
   async function start(hostId) {
     starting = true;
     const host = store.get(hostId);
+    hostCommand = (host && host.command) || '';
     console.log(`[web-ssh] 접속 시도 ${ip} → ${host ? host.name : hostId}`);
     try {
       client = await connectChain(hostId, ctx);
@@ -349,6 +353,14 @@ wss.on('connection', (ws, req) => {
         if (p) { pending.delete(m.id); p.resolve(m.value); }
         break;
       }
+      case 'capture': // 📋 복사 창: tmux 스크롤 기록 요청
+        if (!stream || capturing) return send({ t: 'capture', id: m.id, error: '사용할 수 없습니다' });
+        capturing = true;
+        runCapture(client, hostCommand)
+          .then((text) => send({ t: 'capture', id: m.id, text }))
+          .catch((e) => send({ t: 'capture', id: m.id, error: e.message }))
+          .finally(() => { capturing = false; });
+        break;
       case 'connect':
         if (client || starting) return;
         cols = clamp(m.cols, 10, 500, 80);

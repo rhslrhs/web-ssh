@@ -286,6 +286,7 @@ h4 { margin: 0 0 8px; font-size: 15px; display: flex; align-items: center; gap: 
   -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
 }
 #copy-text::selection { background: #3b5070; }
+#copy-note { margin: 6px 0 0; font-size: 12px; min-height: 1em; }
 
 /* 터미널에서 바로 선택 (touchselect.js) */
 #term { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
