@@ -275,14 +275,42 @@ h4 { margin: 0 0 8px; font-size: 15px; display: flex; align-items: center; gap: 
 }
 
 /* 복사 모드 */
-.copy-dlg { width: min(720px, calc(var(--vw100, 100vw) - 24px)); }
+.copy-dlg { width: min(720px, calc(var(--vw100, 100vw) - 16px)); max-height: calc(var(--vh100, 100dvh) - 16px); }
 .copy-dlg h3 { margin-bottom: 6px; }
 #copy-text {
-  width: 100%; height: min(calc(var(--vh100, 100dvh) * .6), 520px); resize: none;
-  font-family: ui-monospace, "Cascadia Mono", "D2Coding", Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.35;
-  background: #0d1117; color: #e6edf3; border-color: #30363d; white-space: pre; overflow: auto;
-  -webkit-user-select: text; user-select: text;
+  height: min(calc(var(--vh100, 100dvh) - 230px), 560px); min-height: 160px; overflow: auto; overscroll-behavior: contain;
+  padding: 8px 10px; border: 1px solid #30363d; border-radius: 8px; outline: none;
+  font-family: ui-monospace, "Cascadia Mono", "D2Coding", Menlo, Consolas, monospace; font-size: 13px; line-height: 1.45;
+  background: #0d1117; color: #e6edf3;
+  white-space: pre-wrap; overflow-wrap: anywhere; /* 가로 스크롤 없이 줄바꿈 */
+  -webkit-user-select: text; user-select: text; -webkit-touch-callout: default;
 }
+#copy-text::selection { background: #3b5070; }
+
+/* 터미널에서 바로 선택 (touchselect.js) */
+#term { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+/* 글자 줄(span)은 출력·커서 깜빡임마다 새로 그려져 교체된다. 손가락 아래 요소가 사라지면
+   이후 터치 이벤트(떼기·끌기)가 앱에 오지 않으므로, 터치는 고정된 화면 요소가 받게 한다 */
+#term .xterm-rows { pointer-events: none; }
+.tsel-ui { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+.tsel-ui[hidden] { display: none; }
+.tsel-bar {
+  position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 6px; padding: 6px; border-radius: 12px; pointer-events: auto;
+  background: #161b22; border: 1px solid #30363d; box-shadow: 0 4px 16px rgba(0, 0, 0, .5);
+}
+.tsel-bar.bottom { top: auto; bottom: 8px; }
+.tsel-bar button { padding: 8px 12px; font-size: 14px; color: #e6edf3; background: #21262d; border: 1px solid #30363d; white-space: nowrap; }
+.tsel-bar button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.tsel-h { position: absolute; width: 44px; height: 44px; margin-left: -22px; pointer-events: auto; touch-action: none; }
+.tsel-h[hidden] { display: none; }
+.tsel-h i {
+  position: absolute; top: 2px; left: 13px; width: 18px; height: 18px; background: #4c8dff;
+  border-radius: 0 50% 50% 50%; /* 왼쪽 손잡이: 뾰족한 끝이 왼쪽 위 */
+}
+.tsel-h[data-side="r"] i { border-radius: 50% 0 50% 50%; }
+.tsel-h[data-side="l"] i { left: 22px; }
+.tsel-h[data-side="r"] i { left: 4px; }
 
 .switch-row { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; margin-bottom: 6px; cursor: pointer; }
 .switch-row input { width: auto; margin-top: 3px; }

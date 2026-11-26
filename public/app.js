@@ -730,6 +730,7 @@ function ensureTerm() {
   });
   new ResizeObserver(scheduleFit).observe($('#term-wrap'));
   setupTouchScroll($('#term'));
+  setupTouchSelect(term, $('#term'), $('#term-wrap'), { onCopy: (t) => copyText(t), onOpenAll: openCopyMode });
 }
 
 // ── 모바일 터치 스크롤 ──
@@ -856,18 +857,33 @@ function terminalText() {
   return lines.join('\n');
 }
 function openCopyMode() {
-  const ta = $('#copy-text');
-  ta.value = term ? terminalText() : '';
+  const box = $('#copy-text');
+  box.textContent = term ? terminalText() : '';
   $('#dlg-copy').showModal();
-  ta.scrollTop = ta.scrollHeight;
+  box.scrollTop = box.scrollHeight;
 }
+// 버튼을 누르는 순간 선택이 풀리는 브라우저가 있어 누르기 시작할 때 선택을 잡아 둔다
+let copySel = '';
+function copyBoxSelection() {
+  const s = getSelection();
+  return s && !s.isCollapsed && $('#copy-text').contains(s.anchorNode) ? s.toString() : '';
+}
+$('#copy-all').addEventListener('pointerdown', () => { copySel = copyBoxSelection(); });
 $('#copy-all').addEventListener('click', async () => {
-  const ta = $('#copy-text');
-  const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
-  if (await copyText(sel || ta.value)) $('#dlg-copy').close();
+  const text = copyBoxSelection() || copySel || $('#copy-text').textContent;
+  copySel = '';
+  if (await copyText(text)) $('#dlg-copy').close();
+});
+$('#copy-select-all').addEventListener('click', () => {
+  const r = document.createRange();
+  r.selectNodeContents($('#copy-text'));
+  const s = getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
 });
 $('#copy-close').addEventListener('click', () => $('#dlg-copy').close());
-$('#dlg-copy').addEventListener('close', () => { if (!$('#view-term').hidden) focusInput(); });
+// 휴대폰은 복사 후 키보드가 튀어 오르지 않게 포커스를 주지 않는다
+$('#dlg-copy').addEventListener('close', () => { if (!$('#view-term').hidden && !matchMedia('(pointer: coarse)').matches) focusInput(); });
 
 // 입력창을 쓰는 중이면 입력창, 아니면 터미널에 포커스
 function focusInput() { if (!$('#line-input').hidden) $('#line-text').focus(); else if (term) term.focus(); }
